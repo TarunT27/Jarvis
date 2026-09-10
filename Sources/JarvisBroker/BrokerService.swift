@@ -14,7 +14,7 @@ import JarvisCore
     private var roots:[URL]=[]
     private var apps:Set<String>=["com.apple.finder","com.apple.Safari","com.apple.TextEdit","com.apple.Notes","com.apple.reminders","com.apple.iCal"]
     private var active:Set<UUID>=[]
-    private var privateTasks:Set<UUID>=[]
+    private let privacy=PrivacyLedger()
     private let store=EKEventStore()
 
     /// Opens the encrypted vault with the root key the app read from the Keychain.
@@ -45,6 +45,7 @@ import JarvisCore
                 guard data.count<1_000_000 else { throw JarvisError.message("Request exceeds size limit.") }
                 if let startupError=self.startupError { throw JarvisError.message(startupError) }
                 response=try await self.handle(JSONDecoder().decode(BrokerRequest.self,from:data))
+                try? self.vault?.flush()
             } catch { response=BrokerReply(error:error.localizedDescription) }
             reply((try? JSONEncoder().encode(response)) ?? Data())
         }
@@ -60,12 +61,20 @@ import JarvisCore
         let (vault,google)=try ready()
         switch r.operation {
         case "status": return BrokerReply(result:try json(["google":google.connected,"brave":((try? vault.credential("brave-key")) ?? nil) != nil,"folders":roots.map(\.path),"apps":apps.sorted()]))
-        case "begin": guard let id=r.taskID else { throw JarvisError.message("Missing task.") };policy.begin(id);active.insert(id);return BrokerReply(result:"Ready")
-        case "end": if let id=r.taskID { policy.end(id);active.remove(id);privateTasks.remove(id) };return BrokerReply(result:"Ended")
-        case "cancel": policy.cancelAll();active.removeAll();privateTasks.removeAll();return BrokerReply(result:"Stopped")
+        case "begin":
+            guard let id=r.taskID,let conversation=r.conversationID else { throw JarvisError.message("Missing task.") }
+            policy.begin(id);active.insert(id)
+            // Attached screen contents are private too, and the broker never sees the image.
+            privacy.begin(task:id,conversation:conversation,carriesPrivateContent:r.value=="private")
+            return BrokerReply(result:try json(["web_allowed":privacy.webAllowed(conversation:conversation)]))
+        // Ending a task must NOT clear the taint: the conversation continues.
+        case "end": if let id=r.taskID { policy.end(id);active.remove(id);privacy.endTask(id) };return BrokerReply(result:"Ended")
+        case "cancel": policy.cancelAll();active.removeAll();privacy.forgetTasks();return BrokerReply(result:"Stopped")
         case "propose":
             guard let call=r.call,let id=r.taskID,active.contains(id) else { throw JarvisError.message("Task is no longer active.") }
-            if call.name=="web_search",privateTasks.contains(id) { throw JarvisError.message("Web search is disabled after private content was read. Start a new task with the exact public search query.") }
+            if call.name=="web_search",!privacy.webAllowed(task:id) {
+                throw JarvisError.message("Web search is off for this conversation because private content was read in it. Start a new conversation and give the exact public search terms.")
+            }
             if let proposal=try policy.propose(call,taskID:id) { return BrokerReply(proposal:proposal) }
             return try await run(call,task:id)
         case "approve":
@@ -90,7 +99,10 @@ import JarvisCore
             let url=URL(fileURLWithPath:path).standardizedFileURL.resolvingSymlinksInPath();var dir:ObjCBool=false
             guard FileManager.default.fileExists(atPath:url.path,isDirectory:&dir),dir.boolValue else { throw JarvisError.message("Folder is unavailable.") }
             if !roots.contains(url) { roots.append(url) };try persistRoots();return BrokerReply(result:"Folder approved. Search reads documents on demand.")
-        case "remove_folder": roots.removeAll { $0.path==r.value };try persistRoots();try vault.clear(kind:"document");return BrokerReply(result:"Access revoked and document index cleared")
+        case "remove_folder":
+            roots.removeAll { $0.path==r.value };try persistRoots()
+            try vault.clear(kind:"document");try vault.clear(kind:"docmeta")
+            return BrokerReply(result:"Access revoked and document index cleared")
         case "allow_app":
             guard let id=r.value,NSWorkspace.shared.urlForApplication(withBundleIdentifier:id) != nil else { throw JarvisError.message("Choose an installed application.") }
             apps.insert(id);try vault.put(kind:"settings",body:json(apps.sorted()),id:"apps");return BrokerReply(result:"Application approved")
@@ -103,51 +115,26 @@ import JarvisCore
         default:throw JarvisError.message("Unsupported broker operation.")
         }
     }
-    private func contents(_ url:URL) throws -> String {
-        let safe=try PathPolicy.resolve(url.path,roots:roots)
-        let values=try safe.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey])
-        guard values.isRegularFile==true,(values.fileSize ?? Int.max)<10_000_000 else { throw JarvisError.message("Only regular documents under 10 MB are supported.") }
-        if safe.pathExtension.lowercased()=="pdf" {
-            guard let pdf=PDFDocument(url:safe) else { throw JarvisError.message("PDF could not be opened.") }
-            return (0..<min(pdf.pageCount,150)).compactMap { index in pdf.page(at:index)?.string.map { "[Page \(index+1)]\n"+$0 } }.joined(separator:"\n")
-        }
-        guard ["txt","md","markdown"].contains(safe.pathExtension.lowercased()) else { throw JarvisError.message("Only PDF, Markdown, and text are supported.") }
-        return try String(contentsOf:safe,encoding:.utf8)
-    }
     private func run(_ call:ToolCall,task:UUID,actionID:UUID=UUID()) async throws -> BrokerReply {
         guard active.contains(task) else { throw JarvisError.message("Task was stopped.") }
         let a=call.arguments;let (vault,google)=try ready()
         var result=""
         switch call.name {
         case "search_documents":
-            privateTasks.insert(task)
-            let terms=a["query"]!.lowercased().split(whereSeparator:{ !$0.isLetter && !$0.isNumber }).map(String.init)
-            var hits:[[String:String]]=[];var inspected=0
-            for root in roots {
-                guard let enumerator=FileManager.default.enumerator(at:root,includingPropertiesForKeys:[.isRegularFileKey],options:[.skipsHiddenFiles,.skipsPackageDescendants]) else { continue }
-                while let url=enumerator.nextObject() as? URL {
-                    inspected+=1;if inspected>1500 { break }
-                    guard ["pdf","txt","md","markdown"].contains(url.pathExtension.lowercased()),let text=try? contents(url) else { continue }
-                    let chunks=stride(from:0,to:min(text.count,150_000),by:1600).map { offset -> String in let start=text.index(text.startIndex,offsetBy:offset);return String(text[start...].prefix(1800)) }
-                    for chunk in chunks where terms.contains(where:{ chunk.lowercased().contains($0) || url.lastPathComponent.lowercased().contains($0) }) {
-                        hits.append(["source":url.path,"passage":chunk]);if hits.count>=8 { break }
-                    }
-                    if hits.count>=8 { break }
-                }
-                if hits.count>=8 { break }
-            }
-            result=try json(hits)
-        case "read_document": privateTasks.insert(task);result=String(try contents(URL(fileURLWithPath:a["path"]!)).prefix(18000))
+            privacy.markPrivate(task:task)
+            try DocumentIndex.refresh(vault,roots:roots)
+            result=try json(DocumentIndex.search(vault,query:a["query"]!))
+        case "read_document": privacy.markPrivate(task:task);result=String(try DocumentIndex.contents(of:a["path"]!,roots:roots).prefix(18000))
         case "open_app":
             guard apps.contains(a["bundle_id"]!),let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:a["bundle_id"]!) else { throw JarvisError.message("Approve this app in Settings first.") }
             _=try await NSWorkspace.shared.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration());result="Application opened."
         case "save_memory":try vault.put(kind:"memory",body:a["text"]!);result="Memory saved."
         case "save_draft":try vault.put(kind:"draft",body:json(a));result="Draft saved locally. Nothing was sent."
         case "gmail_search":
-            privateTasks.insert(task)
+            privacy.markPrivate(task:task)
             result=try json(await google.request(path:"/gmail/v1/users/me/messages",query:["q":a["query"]!,"maxResults":"10"]))
         case "gmail_read":
-            privateTasks.insert(task);let id=try safeID(a["id"]!)
+            privacy.markPrivate(task:task);let id=try safeID(a["id"]!)
             let message=try await google.request(path:"/gmail/v1/users/me/messages/"+id,query:["format":"full"])
             result=try json(["id":id,"snippet":message["snippet"] ?? "","payload":extractMail(message["payload"] as? [String:Any] ?? [:])])
         case "send_email":
@@ -157,19 +144,19 @@ import JarvisCore
             let digest=callDigest(call)
             let prior=try vault.rows(kind:"outbox")
             guard !prior.contains(where:{$0["source"]==digest}) else { throw JarvisError.message("This send has already been attempted. Check Sent mail and the outbox before composing a new send; automatic resend is blocked.") }
-            try vault.put(kind:"outbox",body:try json(["status":"attempting","message_id":messageID]),source:digest,id:actionID.uuidString)
+            try vault.put(kind:"outbox",body:try json(["status":"attempting","message_id":messageID]),source:digest,id:actionID.uuidString,durable:true)
             do {
                 let sent=try await google.request(path:"/gmail/v1/users/me/messages/send",body:["raw":Data(mime.utf8).base64URLEncoded],method:"POST")
-                try vault.put(kind:"outbox",body:try json(["status":"sent","message_id":messageID,"gmail_id":sent["id"] ?? ""]),source:digest,id:actionID.uuidString)
+                try vault.put(kind:"outbox",body:try json(["status":"sent","message_id":messageID,"gmail_id":sent["id"] ?? ""]),source:digest,id:actionID.uuidString,durable:true)
                 result="Email sent."
             } catch {
                 let found=try? await google.request(path:"/gmail/v1/users/me/messages",query:["q":"in:sent rfc822msgid:"+messageID,"maxResults":"1"])
                 let resolved = !(found?["messages"] as? [[String:Any]] ?? []).isEmpty
-                try vault.put(kind:"outbox",body:try json(["status":resolved ? "sent":"uncertain","message_id":messageID]),source:digest,id:actionID.uuidString)
+                try vault.put(kind:"outbox",body:try json(["status":resolved ? "sent":"uncertain","message_id":messageID]),source:digest,id:actionID.uuidString,durable:true)
                 if resolved { result="Email confirmed in Sent mail." } else { throw JarvisError.message("Send outcome is uncertain. Check Gmail Sent before sending again. Jarvis will not retry this email.") }
             }
         case "calendar_list":
-            privateTasks.insert(task);result=try json(await google.request(path:"/calendar/v3/calendars/primary/events",query:["timeMin":a["start"]!,"timeMax":a["end"]!,"singleEvents":"true","orderBy":"startTime","maxResults":"30"]))
+            privacy.markPrivate(task:task);result=try json(await google.request(path:"/calendar/v3/calendars/primary/events",query:["timeMin":a["start"]!,"timeMax":a["end"]!,"singleEvents":"true","orderBy":"startTime","maxResults":"30"]))
         case "calendar_create","calendar_update":
             var event:[String:Any]=["summary":a["title"]!,"start":["dateTime":a["start"]!,"timeZone":a["timezone"]!],"end":["dateTime":a["end"]!,"timeZone":a["timezone"]!],"attendees":a["attendees"]!.split(separator:",").map { ["email":$0.trimmingCharacters(in:.whitespaces)] }]
             let creating=call.name=="calendar_create"
@@ -190,13 +177,9 @@ import JarvisCore
             }
             try store.save(reminder,commit:true);result="Reminder created."
         case "move_file":
-            let source=try PathPolicy.resolve(a["source"]!,roots:roots),dest=try PathPolicy.resolve(a["destination"]!,roots:roots,mustExist:false)
-            guard !roots.contains(source),!FileManager.default.fileExists(atPath:dest.path) else { throw JarvisError.message("Cannot move an approved root or overwrite an existing file.") }
-            try FileManager.default.moveItem(at:source,to:dest);result="File moved."
+            try DocumentIndex.move(from:a["source"]!,to:a["destination"]!,roots:roots);result="File moved."
         case "trash_file":
-            let source=try PathPolicy.resolve(a["path"]!,roots:roots)
-            guard !roots.contains(source) else { throw JarvisError.message("Cannot trash an approved root folder.") }
-            try FileManager.default.trashItem(at:source,resultingItemURL:nil);result="Moved to Trash."
+            try DocumentIndex.trash(a["path"]!,roots:roots);result="Moved to Trash."
         case "web_search":
             guard let secretData=try vault.credential("brave-key"),let key=String(data:secretData,encoding:.utf8),!key.isEmpty else { throw JarvisError.message("Add a Brave Search API key in Connections.") }
             var u=URLComponents(string:"https://api.search.brave.com/res/v1/web/search")!;u.queryItems=[URLQueryItem(name:"q",value:a["query"]!),URLQueryItem(name:"count",value:"5")]

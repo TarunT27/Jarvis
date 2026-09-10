@@ -49,6 +49,11 @@ public final class Vault: CredentialStore {
     private let key: SymmetricKey
     private let url: URL
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    /// save() re-encrypts and rewrites the whole database, so it is deferred: writes mark
+    /// the vault dirty and the broker flushes once per request. Anything that must survive
+    /// a crash mid-request - the outbox intent written before a send, and credentials -
+    /// passes durable: true and is written immediately.
+    private var dirty = false
     public init(url: URL, key: SymmetricKey) throws {
         self.url = url; self.key = key
         guard sqlite3_open(":memory:", &db) == SQLITE_OK else { throw JarvisError.message("Cannot open memory database.") }
@@ -66,7 +71,12 @@ public final class Vault: CredentialStore {
         try execute("CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, body)")
         try prune()
     }
-    deinit { sqlite3_close(db) }
+    deinit {
+        // Deferred writes must not die with the process. Best effort: if this fails the
+        // data is lost either way, and deinit cannot throw.
+        if dirty { try? save() }
+        sqlite3_close(db)
+    }
     private func execute(_ sql: String, _ args: [String] = []) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { throw JarvisError.message("Database statement failed.") }
@@ -76,12 +86,15 @@ public final class Vault: CredentialStore {
         while rc == SQLITE_ROW { rc = sqlite3_step(stmt) }
         guard rc == SQLITE_DONE else { throw JarvisError.message("Database update failed.") }
     }
-    public func put(kind: String, body: String, source: String = "", id: String = UUID().uuidString) throws {
+    public func put(kind: String, body: String, source: String = "", id: String = UUID().uuidString, durable: Bool = false) throws {
         try execute("DELETE FROM search WHERE id=?", [id])
         try execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)", [id,kind,body,source,String(Date().timeIntervalSince1970)])
-        try execute("INSERT INTO search VALUES (?,?)", [id,body]); try save()
+        try execute("INSERT INTO search VALUES (?,?)", [id,body])
+        dirty = true; if durable { try save() }
     }
-    public func rows(kind: String? = nil, query: String? = nil) throws -> [[String: String]] {
+    /// Persist any deferred writes. Call at the end of each request.
+    public func flush() throws { if dirty { try save() } }
+    public func rows(kind: String? = nil, query: String? = nil, limit: Int = 200) throws -> [[String: String]] {
         var sql = "SELECT r.id,r.kind,r.body,r.source,r.created FROM records r"
         var args: [String] = []; var clauses: [String] = []
         if let query, !query.isEmpty {
@@ -91,7 +104,7 @@ public final class Vault: CredentialStore {
         }
         if let kind { clauses.append("r.kind=?"); args.append(kind) }
         if !clauses.isEmpty { sql += " WHERE " + clauses.joined(separator: " AND ") }
-        sql += " ORDER BY r.created DESC LIMIT 200"
+        sql += " ORDER BY r.created DESC LIMIT \(max(1, min(limit, 100_000)))"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { throw JarvisError.message("Search failed.") }
         defer { sqlite3_finalize(stmt) }
@@ -115,9 +128,17 @@ public final class Vault: CredentialStore {
     }
     public func setCredential(_ data: Data?, for name: String) throws {
         guard let data else { try? delete(id: "credential:" + name); return }
-        try put(kind: "credential", body: data.base64EncodedString(), id: "credential:" + name)
+        try put(kind: "credential", body: data.base64EncodedString(), id: "credential:" + name, durable: true)
     }
     public func delete(id: String) throws { try execute("DELETE FROM search WHERE id=?",[id]); try execute("DELETE FROM records WHERE id=?",[id]); try save() }
+
+    /// Removes every row of a kind that came from one source, in two statements rather
+    /// than a scan of the whole table per file.
+    public func deleteAll(kind: String, source: String) throws {
+        try execute("DELETE FROM search WHERE id IN (SELECT id FROM records WHERE kind=? AND source=?)", [kind, source])
+        try execute("DELETE FROM records WHERE kind=? AND source=?", [kind, source])
+        dirty = true
+    }
     public func clear(kind: String? = nil) throws {
         if let kind {
             try execute("DELETE FROM search WHERE id IN (SELECT id FROM records WHERE kind=?)", [kind])
@@ -128,7 +149,7 @@ public final class Vault: CredentialStore {
     public func prune() throws {
         let cutoff = String(Date().addingTimeInterval(-30*86400).timeIntervalSince1970)
         try execute("DELETE FROM search WHERE id IN (SELECT id FROM records WHERE kind IN ('chat','audit') AND created < CAST(? AS REAL))", [cutoff])
-        try execute("DELETE FROM records WHERE kind IN ('chat','audit') AND created < CAST(? AS REAL)", [cutoff]); try save()
+        try execute("DELETE FROM records WHERE kind IN ('chat','audit') AND created < CAST(? AS REAL)", [cutoff]); dirty = true
     }
     private func save() throws {
         var count: Int64 = 0
@@ -139,5 +160,6 @@ public final class Vault: CredentialStore {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try sealed.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        dirty = false
     }
 }

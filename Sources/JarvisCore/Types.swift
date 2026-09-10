@@ -62,10 +62,15 @@ public enum Configuration {
 public struct BrokerRequest: Codable {
     public var operation: String
     public var taskID: UUID?
+    /// Groups the tasks of one conversation. Private-content taint lives at this
+    /// scope, not per task, so reading email in one turn still blocks web search
+    /// in the next. Cleared only by starting a new conversation.
+    public var conversationID: UUID?
     public var call: ToolCall?
     public var proposal: ActionProposal?
     public var value: String?
-    public init(_ operation: String, taskID: UUID? = nil, call: ToolCall? = nil, proposal: ActionProposal? = nil, value: String? = nil) {
-        self.operation = operation; self.taskID = taskID; self.call = call; self.proposal = proposal; self.value = value
+    public init(_ operation: String, taskID: UUID? = nil, conversationID: UUID? = nil, call: ToolCall? = nil, proposal: ActionProposal? = nil, value: String? = nil) {
+        self.operation = operation; self.taskID = taskID; self.conversationID = conversationID
+        self.call = call; self.proposal = proposal; self.value = value
     }
 }

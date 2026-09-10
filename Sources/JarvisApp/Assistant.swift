@@ -37,6 +37,9 @@ import ScreenCaptureKit
     private var activeID:UUID?
     private var approvalContinuation:CheckedContinuation<Bool,Never>?
     private var epoch=UUID()
+    /// Identifies the current conversation to the broker, which tracks whether private
+    /// content has been read in it. Regenerated only by starting a new conversation.
+    private var conversation=UUID()
     private var shortcutHeld=false
     private var turns:[[String:Any]]=[]
     init() {
@@ -95,7 +98,16 @@ import ScreenCaptureKit
     }
     private func run(text:String,image:String?,id:UUID,message:ChatMessage) async {
         do {
-            _=try await broker.request(BrokerRequest("begin",taskID:id));await save(message)
+            // The broker decides whether web search is available: it owns the record of
+            // whether this conversation has touched private content, and that record
+            // survives across turns. An attached screenshot counts as private.
+            let opened=try await broker.request(BrokerRequest("begin",taskID:id,conversationID:conversation,value:image != nil ? "private":nil))
+            var noWeb = image != nil
+            if let data=opened.result?.data(using:.utf8),
+               let flags=try? JSONSerialization.jsonObject(with:data) as? [String:Any] {
+                noWeb = noWeb || !(flags["web_allowed"] as? Bool ?? true)
+            }
+            await save(message)
             let memoryResponse=try await broker.request(BrokerRequest("records",value:"memory"))
             let memories=decodeRows(memoryResponse.result).prefix(30).compactMap{$0["body"]}.joined(separator:"\n")
             let system="""
@@ -108,7 +120,6 @@ import ScreenCaptureKit
             var user:[String:Any]=["role":"user","content":text]
             if let image { user["images"]=[image] }
             turns.append(user)
-            var noWeb=image != nil || !memories.isEmpty || messages.count>1
             for _ in 0..<6 {
                 try Task.checkCancellation();guard epoch==id else { throw CancellationError() }
                 status="Thinking locally"
@@ -164,7 +175,7 @@ import ScreenCaptureKit
         decide(false);proposal=nil;activeID=nil;status="Stopped"
         if let oldID { Task { _=try? await broker.request(BrokerRequest("end",taskID:oldID)) } }
     }
-    func newChat() { stop();messages=[];turns=[];screenImage=nil;status="Ready" }
+    func newChat() { stop();messages=[];turns=[];screenImage=nil;conversation=UUID();status="Ready" }
     func press() {
         guard !shortcutHeld else { return };shortcutHeld=true;stop()
         recordingTask=Task {

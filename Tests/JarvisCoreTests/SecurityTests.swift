@@ -35,6 +35,7 @@ final class SecurityTests: XCTestCase {
         var vault: Vault? = try Vault(url:url,key:key)
         try vault!.put(kind:"memory",body:"private elephant secret",id:"one")
         XCTAssertEqual(try vault!.rows(query:"elephant").count,1)
+        try vault!.flush()
         let raw=try Data(contentsOf:url)
         XCTAssertNil(raw.range(of:Data("private elephant secret".utf8)))
         vault=nil
@@ -111,6 +112,19 @@ final class SecurityTests: XCTestCase {
         XCTAssertEqual(try reopened.credential("google-token"), token)
         try reopened.setCredential(nil, for: "google-token")
         XCTAssertNil(try reopened.credential("google-token"))
+        try? FileManager.default.removeItem(at: folder)
+    }
+    func testDeferredWritesSurviveClose() throws {
+        // put() defers the (whole-file) re-encrypt. Data written but not explicitly
+        // flushed must still reach disk when the vault closes, or a broker exit would
+        // silently drop the most recent conversation.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = folder.appendingPathComponent("vault.enc"), key = SymmetricKey(size: .bits256)
+        var vault: Vault? = try Vault(url: url, key: key)
+        try vault!.put(kind: "chat", body: "unflushed message", id: "late")
+        vault = nil                                   // no explicit flush
+        let reopened = try Vault(url: url, key: key)
+        XCTAssertEqual(try reopened.rows(kind: "chat").first?["body"], "unflushed message")
         try? FileManager.default.removeItem(at: folder)
     }
 }
