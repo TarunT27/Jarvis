@@ -89,6 +89,38 @@ Note: the project's `.runtime/ollama-models` still holds a 6.1 GB duplicate of
 Ollama app at the same time as Jarvis, both servers can hold a model resident, so watch
 total memory when using them together.
 
+### 8. "Noted." - the assistant said it remembered, and did not (fixed)
+
+Found by driving the packaged app rather than by a benchmark. Asked "Remember that I
+prefer concise replies", the app answered "Noted." and saved nothing: Memory read
+"Nothing saved yet" and Action history was empty.
+
+The benchmark scored this 3/3 because it sends one message with no history. Real
+conversations always have history. Measured directly:
+
+| context | save_memory called |
+|---|---|
+| no history | 5/5 |
+| with four turns of history | 0/5 |
+
+It is specific to memory, not a general loss of tool use - `create_reminder` and
+`search_documents` stayed at 4/4 with the same history. The cause is in the transcript
+itself: an earlier turn ("call me Sir or Mr. Tata") was acknowledged conversationally
+without saving, and the model copies that precedent. Three prompt variants, including an
+explicit "never claim you remembered something unless the tool ran", changed nothing
+(8/12 each).
+
+So the explicit phrasing is now honoured deterministically rather than left to the model:
+`MemoryRequest.fact(in:)` recognises "remember that ...", ignoring questions
+("Do you remember ...?"), reminiscing ("Remember when ..."), and reminders
+("Remember to ..." belongs to create_reminder). This matches the design already written
+down - lasting facts are saved through an explicit "remember this" - and it changes only
+*who decides to propose*: save_memory stays consequential, so the approval sheet still
+shows the exact text and nothing is written until you approve.
+
+Verified in the packaged app: the same request that produced "Noted." now raises the
+approval sheet, approving writes the memory, and Delete removes it.
+
 ## Stage 1 gate
 
 | Item | Status |
@@ -172,3 +204,10 @@ log show --last 10m --predicate 'subsystem == "local.jarvis.mac"' --info
   says which condition is unmet.
 - Deep mode reliability is measured on the same 20 cases as everyday mode. A larger case
   set would tighten the estimate; 0.983 rests on a single miss in 60 runs.
+- The tool benchmark sends one message with no conversation history. That is not how the
+  app is used, and it hid the save_memory failure above entirely. Treat its scores as an
+  upper bound until the cases are replayed with history.
+- Approving a folder needs your click: the folder picker is a system panel owned by
+  another process, which automated testing is not permitted to drive. Until a folder is
+  approved, the indexed search path is covered by unit tests but not exercised in the
+  running app.

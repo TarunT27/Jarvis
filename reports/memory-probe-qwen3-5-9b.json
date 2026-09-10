@@ -1,0 +1,41 @@
+{
+  "model": "qwen3.5:9b",
+  "baseline_mb": 8717.6,
+  "baseline_detail": {
+    "ollama": 74.5,
+    "python": 780.2,
+    "llama-server": 7862.8
+  },
+  "peak_mb": 9668.0,
+  "peak_gb": 9.44,
+  "peak_detail_mb": {
+    "ollama": 74.4,
+    "llama-server": 8014.0,
+    "python": 781.0,
+    "whisper-cli": 798.6
+  },
+  "mode": "everyday",
+  "budget_gb": 16.0,
+  "within_budget": true,
+  "timeline": [
+    {
+      "turn": 0,
+      "seconds": 16.6,
+      "resident_mb": 8869.4,
+      "transcript_ok": true
+    },
+    {
+      "turn": 1,
+      "seconds": 9.06,
+      "resident_mb": 8924.0,
+      "transcript_ok": true
+    },
+    {
+      "turn": 2,
+      "seconds": 12.03,
+      "resident_mb": 9036.9,
+      "transcript_ok": true
+    }
+  ],
+  "limits": "Short mixed workload on one machine. Sustained 30-minute thermal and swap validation is separate."
+}

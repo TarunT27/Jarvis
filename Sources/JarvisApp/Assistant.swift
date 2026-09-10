@@ -120,11 +120,32 @@ import ScreenCaptureKit
             var user:[String:Any]=["role":"user","content":text]
             if let image { user["images"]=[image] }
             turns.append(user)
+            // An explicit "remember ..." is honoured directly. The model reliably calls
+            // save_memory for this in isolation but almost never once the conversation has
+            // history - it copies the earlier turns where a preference was merely
+            // acknowledged and answers "Noted." while saving nothing. The user still
+            // approves the exact text before it is written.
+            var handledMemory = false
+            if let fact = MemoryRequest.fact(in: text) {
+                let call = ToolCall("save_memory", ["text": fact])
+                if let proposed = try? await broker.request(BrokerRequest("propose",taskID:id,call:call)).proposal {
+                    proposal = proposed; status = "Awaiting your approval"
+                    let approved = await withCheckedContinuation { continuation in approvalContinuation = continuation }
+                    proposal = nil; try Task.checkCancellation()
+                    if approved { _ = try? await broker.request(BrokerRequest("approve",proposal:proposed)) }
+                    handledMemory = true
+                }
+            }
             for _ in 0..<6 {
                 try Task.checkCancellation();guard epoch==id else { throw CancellationError() }
                 status="Thinking locally"
                 let index=messages.count;messages.append(ChatMessage(role:"assistant",content:""))
-                let tools=ToolCatalog.definitions.filter { definition in let name=(definition["function"] as? [String:Any])?["name"] as? String;return !(noWeb && name=="web_search") }
+                let tools=ToolCatalog.definitions.filter { definition in
+                    let name=(definition["function"] as? [String:Any])?["name"] as? String
+                    if noWeb && name=="web_search" { return false }
+                    if handledMemory && name=="save_memory" { return false }
+                    return true
+                }
                 let result=try await model.respond(model:deep ? Configuration.deep:Configuration.everyday,messages:turns,tools:tools,keepWarm:keepWarm) { [weak self] token in
                     guard let self else { return }
                     await MainActor.run { guard self.epoch==id,self.messages.indices.contains(index) else { return };self.messages[index].content+=token }
