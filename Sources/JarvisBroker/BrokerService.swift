@@ -82,6 +82,10 @@ import JarvisCore
             let call=try policy.consume(proposal)
             return try await run(call,task:proposal.taskID,actionID:proposal.id)
         case "records": return BrokerReply(result:try json(vault.rows(kind:r.value)))
+        case "organization_save":
+            guard let value=r.value,!value.isEmpty else { throw JarvisError.message("Organization data is empty.") }
+            try vault.put(kind:"organization",body:value,id:"organization")
+            return BrokerReply(result:"Organization saved")
         case "chat":
             guard let value=r.value else { throw JarvisError.message("Missing message.") }
             try vault.prune();try vault.put(kind:"chat",body:value);return BrokerReply(result:"Saved")

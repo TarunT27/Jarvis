@@ -2,13 +2,18 @@ import Foundation
 import Security
 import CryptoKit
 import CSQLite
+import LocalAuthentication
 
 public enum Keychain {
-    public static func read(_ account: String) throws -> Data? {
+    public static func read(_ account: String, authenticationContext: LAContext? = nil) throws -> Data? {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: Configuration.appID,
             kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var query = q
+        if let authenticationContext {
+            query[kSecUseAuthenticationContext as String] = authenticationContext
+        }
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw JarvisError.message("Keychain is unavailable (\(status)).") }
         return result as? Data
@@ -34,8 +39,8 @@ public enum Keychain {
     /// broker over the code-signature-pinned XPC connection. Every other credential -
     /// Google tokens, the OAuth client, the search key - lives inside the encrypted vault,
     /// which only the broker opens.
-    public static func vaultKey() throws -> SymmetricKey {
-        if let data = try read("vault-key") { return SymmetricKey(data: data) }
+    public static func vaultKey(authenticationContext: LAContext? = nil) throws -> SymmetricKey {
+        if let data = try read("vault-key", authenticationContext: authenticationContext) { return SymmetricKey(data: data) }
         let key = SymmetricKey(size: .bits256)
         try write(key.withUnsafeBytes { Data($0) }, account: "vault-key")
         return key

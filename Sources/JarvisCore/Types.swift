@@ -9,7 +9,44 @@ public struct ChatMessage: Codable, Identifiable, Sendable {
     public var role: String
     public var content: String
     public var created: Date = Date()
-    public init(role: String, content: String) { self.role = role; self.content = content }
+    /// Optional keeps records written by older Jarvis builds decodable.
+    public var conversationID: UUID?
+    public init(role: String, content: String, conversationID: UUID? = nil) {
+        self.role = role; self.content = content; self.conversationID = conversationID
+    }
+}
+public struct ConversationSummary: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var preview: String
+    public var created: Date
+    public var updated: Date
+    public var messageCount: Int
+    public var projectID: UUID?
+
+    public init(id: UUID, title: String = "New conversation", preview: String = "", created: Date = Date(), updated: Date = Date(), messageCount: Int = 0, projectID: UUID? = nil) {
+        self.id = id; self.title = title; self.preview = preview; self.created = created
+        self.updated = updated; self.messageCount = messageCount; self.projectID = projectID
+    }
+}
+public struct JarvisProject: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var created: Date
+    public var updated: Date
+
+    public init(id: UUID = UUID(), name: String, created: Date = Date(), updated: Date = Date()) {
+        self.id = id; self.name = name; self.created = created; self.updated = updated
+    }
+}
+public struct OrganizationState: Codable, Sendable {
+    public var conversations: [ConversationSummary]
+    public var projects: [JarvisProject]
+    public var lastConversationID: UUID?
+
+    public init(conversations: [ConversationSummary] = [], projects: [JarvisProject] = [], lastConversationID: UUID? = nil) {
+        self.conversations = conversations; self.projects = projects; self.lastConversationID = lastConversationID
+    }
 }
 public struct ToolCall: Codable, Equatable, Sendable {
     public var name: String

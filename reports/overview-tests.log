@@ -1,0 +1,103 @@
+[0/1] Planning build
+Building for debugging...
+[0/6] Write swift-version--58304C5D6DBC2206.txt
+Build complete! (0.11s)
+Test Suite 'All tests' started at 2026-09-10 11:32:43.895.
+Test Suite 'JarvisPackageTests.xctest' started at 2026-09-10 11:32:43.895.
+Test Suite 'ConversationActivityTests' started at 2026-09-10 11:32:43.895.
+Test Case '-[JarvisCoreTests.ConversationActivityTests testCalendarDaysRemainCorrectAcrossDaylightSavingTransition]' started.
+Test Case '-[JarvisCoreTests.ConversationActivityTests testCalendarDaysRemainCorrectAcrossDaylightSavingTransition]' passed (0.002 seconds).
+Test Case '-[JarvisCoreTests.ConversationActivityTests testEmptyHistoryHasZeroDaysForEveryRange]' started.
+Test Case '-[JarvisCoreTests.ConversationActivityTests testEmptyHistoryHasZeroDaysForEveryRange]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.ConversationActivityTests testIncludesTodayAndFirstDayButExcludesOldAndFutureMessages]' started.
+Test Case '-[JarvisCoreTests.ConversationActivityTests testIncludesTodayAndFirstDayButExcludesOldAndFutureMessages]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.ConversationActivityTests testRangeSwitchingChangesCountsWithoutInventingHistory]' started.
+Test Case '-[JarvisCoreTests.ConversationActivityTests testRangeSwitchingChangesCountsWithoutInventingHistory]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.ConversationActivityTests testStreamingPlaceholderDuplicatesAndNonChatRecordsAreExcluded]' started.
+Test Case '-[JarvisCoreTests.ConversationActivityTests testStreamingPlaceholderDuplicatesAndNonChatRecordsAreExcluded]' passed (0.000 seconds).
+Test Suite 'ConversationActivityTests' passed at 2026-09-10 11:32:43.898.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.003 (0.003) seconds
+Test Suite 'DocumentToolTests' started at 2026-09-10 11:32:43.898.
+Test Case '-[JarvisCoreTests.DocumentToolTests testChunkingLongDocumentStaysLinear]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testChunkingLongDocumentStaysLinear]' passed (0.004 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testChunksOverlapAndCoverTheWholeDocument]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testChunksOverlapAndCoverTheWholeDocument]' passed (0.001 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testDeletedFileLeavesTheIndex]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testDeletedFileLeavesTheIndex]' passed (0.003 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testEditedFileReplacesItsOldPassages]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testEditedFileReplacesItsOldPassages]' passed (0.002 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testFilesOutsideApprovedFoldersAreNeverIndexed]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testFilesOutsideApprovedFoldersAreNeverIndexed]' passed (0.002 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testMoveAndTrashRefuseTheApprovedRootItself]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testMoveAndTrashRefuseTheApprovedRootItself]' passed (0.001 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testMoveStaysInsideApprovedFoldersAndNeverOverwrites]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testMoveStaysInsideApprovedFoldersAndNeverOverwrites]' passed (0.002 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testReadRefusesEscapesAndUnsupportedTypes]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testReadRefusesEscapesAndUnsupportedTypes]' passed (0.001 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testSearchFindsPassageAndCitesItsFile]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testSearchFindsPassageAndCitesItsFile]' passed (0.002 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testTrashRefusesFilesOutsideApprovedFolders]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testTrashRefusesFilesOutsideApprovedFolders]' passed (0.001 seconds).
+Test Case '-[JarvisCoreTests.DocumentToolTests testUnchangedFilesAreNotReindexed]' started.
+Test Case '-[JarvisCoreTests.DocumentToolTests testUnchangedFilesAreNotReindexed]' passed (0.001 seconds).
+Test Suite 'DocumentToolTests' passed at 2026-09-10 11:32:43.918.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.020 (0.020) seconds
+Test Suite 'MemoryRequestTests' started at 2026-09-10 11:32:43.918.
+Test Case '-[JarvisCoreTests.MemoryRequestTests testAReminderIsNotAMemory]' started.
+Test Case '-[JarvisCoreTests.MemoryRequestTests testAReminderIsNotAMemory]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.MemoryRequestTests testIgnoresQuestionsAndReminiscing]' started.
+Test Case '-[JarvisCoreTests.MemoryRequestTests testIgnoresQuestionsAndReminiscing]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.MemoryRequestTests testIgnoresUnrelatedMessages]' started.
+Test Case '-[JarvisCoreTests.MemoryRequestTests testIgnoresUnrelatedMessages]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.MemoryRequestTests testRecognisesExplicitRequests]' started.
+Test Case '-[JarvisCoreTests.MemoryRequestTests testRecognisesExplicitRequests]' passed (0.000 seconds).
+Test Suite 'MemoryRequestTests' passed at 2026-09-10 11:32:43.919.
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'PrivacyLedgerTests' started at 2026-09-10 11:32:43.919.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testANewConversationStartsClean]' started.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testANewConversationStartsClean]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testAttachedScreenContentTaintsImmediately]' started.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testAttachedScreenContentTaintsImmediately]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testCancelDoesNotLaunderTaint]' started.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testCancelDoesNotLaunderTaint]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testEvictionForgetsOldestConversationsAndKeepsRecentTaint]' started.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testEvictionForgetsOldestConversationsAndKeepsRecentTaint]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testTaintSurvivesTheEndOfTheTaskThatCausedIt]' started.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testTaintSurvivesTheEndOfTheTaskThatCausedIt]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testUnknownTaskIsRefusedRatherThanAllowed]' started.
+Test Case '-[JarvisCoreTests.PrivacyLedgerTests testUnknownTaskIsRefusedRatherThanAllowed]' passed (0.000 seconds).
+Test Suite 'PrivacyLedgerTests' passed at 2026-09-10 11:32:43.919.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+Test Suite 'SecurityTests' started at 2026-09-10 11:32:43.919.
+Test Case '-[JarvisCoreTests.SecurityTests testApprovalCannotCrossTasks]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testApprovalCannotCrossTasks]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testApprovalsBoundToExactArgumentsAndSingleUse]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testApprovalsBoundToExactArgumentsAndSingleUse]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testCalendarRejectsIntervalSmuggledIntoASingleDateField]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testCalendarRejectsIntervalSmuggledIntoASingleDateField]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testCalendarRejectsInvertedRangeAndUnknownTimezone]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testCalendarRejectsInvertedRangeAndUnknownTimezone]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testCancellationExpiryAndUnsupportedTools]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testCancellationExpiryAndUnsupportedTools]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testCredentialsLiveEncryptedInTheVaultNotTheKeychain]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testCredentialsLiveEncryptedInTheVaultNotTheKeychain]' passed (0.001 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testDeferredWritesSurviveClose]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testDeferredWritesSurviveClose]' passed (0.001 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testHeaderInjectionRejected]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testHeaderInjectionRejected]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testSymlinkEscapeAndSiblingPrefix]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testSymlinkEscapeAndSiblingPrefix]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testToolCatalogMatchesEnforcedPolicy]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testToolCatalogMatchesEnforcedPolicy]' passed (0.000 seconds).
+Test Case '-[JarvisCoreTests.SecurityTests testVaultEncryptionSearchDeletionAndWrongKey]' started.
+Test Case '-[JarvisCoreTests.SecurityTests testVaultEncryptionSearchDeletionAndWrongKey]' passed (0.001 seconds).
+Test Suite 'SecurityTests' passed at 2026-09-10 11:32:43.925.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.005 (0.006) seconds
+Test Suite 'JarvisPackageTests.xctest' passed at 2026-09-10 11:32:43.925.
+	 Executed 37 tests, with 0 failures (0 unexpected) in 0.028 (0.030) seconds
+Test Suite 'All tests' passed at 2026-09-10 11:32:43.925.
+	 Executed 37 tests, with 0 failures (0 unexpected) in 0.028 (0.031) seconds
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

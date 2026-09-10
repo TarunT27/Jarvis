@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AVFAudio
 import JarvisCore
 import Carbon
 
@@ -53,23 +54,35 @@ final class SpeechWorker: @unchecked Sendable {
     }
 }
 final class SampleBuffer: @unchecked Sendable {
-    let lock=NSLock(); var samples=[Float](); var sampleRate: Double=48000
+    let lock=NSLock(); var samples=[Float](); var sampleRate: Double=48000; private var rms:Float=0
     func append(_ buffer: AVAudioPCMBuffer) {
         guard let channel=buffer.floatChannelData?[0] else { return }
         lock.lock(); defer { lock.unlock() }
         sampleRate=buffer.format.sampleRate
-        if samples.count < Int(sampleRate * 90) { samples.append(contentsOf:UnsafeBufferPointer(start:channel,count:Int(buffer.frameLength))) }
+        let count=Int(buffer.frameLength)
+        if count > 0 {
+            var sum:Float=0
+            for sample in UnsafeBufferPointer(start:channel,count:count) { sum += sample * sample }
+            let frameRMS=sqrt(sum / Float(count))
+            rms=max(frameRMS,rms * 0.82)
+        }
+        if samples.count < Int(sampleRate * 90) { samples.append(contentsOf:UnsafeBufferPointer(start:channel,count:count)) }
     }
-    func take() -> ([Float],Double) { lock.lock(); defer { lock.unlock() }; let s=samples; samples=[]; return(s,sampleRate) }
+    var level:Float { lock.lock(); defer { lock.unlock() }; return rms }
+    func take() -> ([Float],Double) { lock.lock(); defer { lock.unlock() }; let s=samples; samples=[]; rms=0; return(s,sampleRate) }
 }
 @MainActor final class VoiceController {
     private var engine: AVAudioEngine?
     private let buffer=SampleBuffer()
     private var player: AVAudioPlayer?
     var onFinished: (() -> Void)?
+    var level:Float { buffer.level }
+    func requestPermission() async -> Bool {
+        await AVAudioApplication.requestRecordPermission()
+    }
     func start() async throws {
         stopPlayback()
-        guard await AVCaptureDevice.requestAccess(for:.audio) else { throw JarvisError.message("Microphone access is off. Enable Jarvis in System Settings → Privacy & Security → Microphone.") }
+        guard await requestPermission() else { throw JarvisError.message("Microphone access is off. Enable Jarvis in System Settings → Privacy & Security → Microphone.") }
         _=buffer.take()
         let e=AVAudioEngine(); let node=e.inputNode; let format=node.outputFormat(forBus:0)
         guard format.sampleRate > 0 else { throw JarvisError.message("No microphone is available.") }

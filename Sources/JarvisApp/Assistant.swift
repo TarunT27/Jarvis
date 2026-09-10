@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AVFoundation
 import Observation
 import JarvisCore
 import ScreenCaptureKit
@@ -9,8 +10,15 @@ import ScreenCaptureKit
     var input=""
     var status="Starting local services"
     var error:String?
+    var microphoneAccessRequired=false
+    /// True once the vault is open. Until then only the model service is usable, and the
+    /// UI offers a way to try Touch ID again - cancelling the prompt must not strand the
+    /// app in a state that only a relaunch can clear.
+    var unlocked=false
+    var unlocking=false
     var busy=false
     var recording=false
+    var voiceLevel:CGFloat=0
     var muted=false
     var keepWarm=false
     var deep=false
@@ -22,7 +30,11 @@ import ScreenCaptureKit
     var apps:[String]=[]
     var googleConnected=false
     var braveConnected=false
-    var selectedPage="Chat"
+    var selectedPage="Overview"
+    var conversations:[ConversationSummary]=[]
+    var projects:[JarvisProject]=[]
+    var selectedProjectID:UUID?
+    var directoryProjectID:UUID?
     var screenImage:String?
     var shortcutOption=0
     private let broker=BrokerClient()
@@ -34,37 +46,78 @@ import ScreenCaptureKit
     private var work:Task<Void,Never>?
     private var speakTask:Task<Void,Never>?
     private var recordingTask:Task<Void,Never>?
+    private var levelTask:Task<Void,Never>?
     private var activeID:UUID?
     private var approvalContinuation:CheckedContinuation<Bool,Never>?
     private var epoch=UUID()
     /// Identifies the current conversation to the broker, which tracks whether private
     /// content has been read in it. Regenerated only by starting a new conversation.
     private var conversation=UUID()
+    private let legacyConversation=UUID(uuidString:"00000000-0000-0000-0000-000000000001")!
     private var shortcutHeld=false
     private var turns:[[String:Any]]=[]
+    private var archive:[ChatMessage]=[]
+
+    var voicePresenceState:VoicePresenceState? {
+        guard !muted else { return nil }
+        if recording { return .listening }
+        if status.hasPrefix("Speaking") { return .speaking }
+        if busy { return .thinking }
+        return nil
+    }
+
     init() {
         shortcut.onPress={ [weak self] in self?.press() }
         shortcut.onRelease={ [weak self] in self?.release() }
         NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { [weak self] _ in Task { @MainActor in self?.stop() } }
-        Task { await start() }
+        Task { await requestMicrophonePermission();await start() }
     }
     func start() async {
+        // The local model service needs no vault access, so it starts alongside the unlock.
+        // Serialising them made the model read "not installed" for as long as the Touch ID
+        // prompt sat unanswered.
+        async let runtimeReady: Void = startRuntime()
+        await unlock()
+        await runtimeReady
+    }
+    private func startRuntime() async {
+        do { try await runtime.start();models=try await model.installed() }
+        catch { if !unlocked { status="Local model service needs attention" };self.error=error.localizedDescription }
+    }
+    /// Opens the vault. Safe to call again: a cancelled or failed Touch ID leaves the app
+    /// locked but retryable rather than requiring a relaunch.
+    func unlock() async {
+        guard !unlocked,!unlocking else { return }
+        unlocking=true; defer { unlocking=false }
         do {
-            // Unlock first and independently of the model service: the broker is an XPC
-            // service and cannot create Keychain items itself, so the app reads the vault's
-            // root key and hands it over the pinned connection. Doing this before the model
-            // starts keeps memories, settings and connections reachable even if Ollama is down.
+            status="Unlock Jarvis with Touch ID"
             try await unlockBroker()
+            unlocked=true; error=nil
             await refresh()
-            try await runtime.start();models=try await model.installed()
+            let organization=decodeOrganization(try await broker.request(BrokerRequest("records",value:"organization")).result)
             let response=try await broker.request(BrokerRequest("records",value:"chat"))
             let rows=decodeRows(response.result)
-            messages=rows.reversed().suffix(50).compactMap { row in guard let d=row["body"]?.data(using:.utf8) else { return nil };return try? JSONDecoder().decode(ChatMessage.self,from:d) }
+            let decoded:[ChatMessage]=rows.reversed().suffix(200).compactMap { row in guard let d=row["body"]?.data(using:.utf8) else { return nil };return try? JSONDecoder().decode(ChatMessage.self,from:d) }
+            archive=decoded.map { message in
+                var message=message
+                if message.conversationID == nil { message.conversationID=legacyConversation }
+                return message
+            }
+            conversations=organization.conversations;projects=organization.projects
+            rebuildConversationIndex()
+            let candidate=organization.lastConversationID ?? conversations.first?.id ?? archive.first?.conversationID
+            conversation=candidate ?? UUID()
+            selectedProjectID=conversations.first(where:{$0.id==conversation})?.projectID
+            messages=archive.filter{$0.conversationID==conversation}.sorted{$0.created<$1.created}
             status=models.contains(Configuration.everyday) ? "Ready · all AI runs on this Mac":"Download the everyday model to begin"
-        } catch { self.error=error.localizedDescription;status="Setup needs attention" }
+        } catch {
+            self.error=error.localizedDescription
+            status="Locked · authenticate to open your data"
+        }
     }
     private func unlockBroker() async throws {
-        let key=try Keychain.vaultKey().withUnsafeBytes { Data($0) }
+        let authenticationContext=try await JarvisAuthentication.authenticate()
+        let key=try Keychain.vaultKey(authenticationContext:authenticationContext).withUnsafeBytes { Data($0) }
         _=try await broker.request(BrokerRequest("unlock",value:key.base64EncodedString()))
     }
     func refresh() async {
@@ -89,12 +142,18 @@ import ScreenCaptureKit
             }
         }
         stop();let id=UUID();epoch=id;activeID=id;busy=true;input="";error=nil
-        let user=ChatMessage(role:"user",content:text);messages.append(user)
+        let user=ChatMessage(role:"user",content:text,conversationID:conversation);messages.append(user)
+        touchConversation(preview:text)
         let image=screenImage;screenImage=nil
         work=Task { await run(text:text,image:image,id:id,message:user) }
     }
     private func save(_ message:ChatMessage) async {
-        if let d=try? JSONEncoder().encode(message),let text=String(data:d,encoding:.utf8) { _=try? await broker.request(BrokerRequest("chat",value:text)) }
+        archive.removeAll{$0.id==message.id};archive.append(message)
+        rebuildConversationIndex()
+        if let d=try? JSONEncoder().encode(message),let text=String(data:d,encoding:.utf8) {
+            _=try? await broker.request(BrokerRequest("chat",value:text))
+            await persistOrganization()
+        }
     }
     private func run(text:String,image:String?,id:UUID,message:ChatMessage) async {
         do {
@@ -139,7 +198,7 @@ import ScreenCaptureKit
             for _ in 0..<6 {
                 try Task.checkCancellation();guard epoch==id else { throw CancellationError() }
                 status="Thinking locally"
-                let index=messages.count;messages.append(ChatMessage(role:"assistant",content:""))
+                let index=messages.count;messages.append(ChatMessage(role:"assistant",content:"",conversationID:conversation))
                 let tools=ToolCatalog.definitions.filter { definition in
                     let name=(definition["function"] as? [String:Any])?["name"] as? String
                     if noWeb && name=="web_search" { return false }
@@ -192,22 +251,40 @@ import ScreenCaptureKit
     func stop() {
         let oldID=activeID
         epoch=UUID();work?.cancel();work=nil;speakTask?.cancel();speakTask=nil;recordingTask?.cancel();recordingTask=nil
+        levelTask?.cancel();levelTask=nil;voiceLevel=0
         speech.cancel();voice.cancel();recording=false;busy=false
         decide(false);proposal=nil;activeID=nil;status="Stopped"
         if let oldID { Task { _=try? await broker.request(BrokerRequest("end",taskID:oldID)) } }
     }
-    func newChat() { stop();messages=[];turns=[];screenImage=nil;conversation=UUID();status="Ready" }
+    func newChat() { selectedPage="Chat";stop();messages=[];turns=[];screenImage=nil;selectedProjectID=nil;conversation=UUID();status="Ready" }
     func press() {
         guard !shortcutHeld else { return };shortcutHeld=true;stop()
         recordingTask=Task {
-            do { try await voice.start();if !shortcutHeld || Task.isCancelled { voice.cancel();return };recording=true;status="Listening · release to send" }
-            catch { self.error=error.localizedDescription;shortcutHeld=false }
+            do { try await voice.start();if !shortcutHeld || Task.isCancelled { voice.cancel();return };recording=true;status="Listening · release to send";beginVoiceLevelMonitoring() }
+            catch {
+                if AVCaptureDevice.authorizationStatus(for:.audio) == .denied || AVCaptureDevice.authorizationStatus(for:.audio) == .restricted {
+                    self.error=nil
+                    self.microphoneAccessRequired=true
+                } else {
+                    self.error=error.localizedDescription
+                }
+                shortcutHeld=false
+            }
         }
+    }
+    func openMicrophoneSettings() {
+        guard let url=URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else { return }
+        NSWorkspace.shared.open(url)
+    }
+    private func requestMicrophonePermission() async {
+        let granted=await voice.requestPermission()
+        guard !granted else { return }
+        microphoneAccessRequired=true
     }
     func release() {
         shortcutHeld=false
         guard recording else { return }
-        recording=false
+        levelTask?.cancel();levelTask=nil;voiceLevel=0;recording=false
         guard let audio=voice.stopRecording() else { status="No speech detected";return }
         busy=true;status="Transcribing locally"
         work=Task {
@@ -231,6 +308,17 @@ import ScreenCaptureKit
             } catch { if epoch==id,!(error is CancellationError) { self.error="Speech: "+error.localizedDescription;status="Ready" } }
         }
     }
+
+    private func beginVoiceLevelMonitoring() {
+        levelTask?.cancel()
+        levelTask=Task { @MainActor [weak self] in
+            while let self, self.recording, !Task.isCancelled {
+                self.voiceLevel=min(1,CGFloat(self.voice.level) * 8)
+                try? await Task.sleep(for:.milliseconds(45))
+            }
+        }
+    }
+
     func changeShortcut() { shortcut.register(key:49,modifiers:shortcutOption==0 ? UInt32(4096|2048):UInt32(256|2048)) }
     func captureScreen() async {
         do {
@@ -271,6 +359,84 @@ import ScreenCaptureKit
         let panel=NSSavePanel();panel.nameFieldStringValue="jarvis-export.json"
         if panel.runModal() == .OK,let url=panel.url { do { try JSONSerialization.data(withJSONObject:records,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic) } catch { self.error=error.localizedDescription } }
     }
+    func openConversation(_ id:UUID) {
+        stop();conversation=id;selectedProjectID=conversations.first(where:{$0.id==id})?.projectID
+        messages=archive.filter{$0.conversationID==id}.sorted{$0.created<$1.created}
+        turns=[];screenImage=nil;selectedPage="Chat";status="Ready"
+        Task { await persistOrganization() }
+    }
+    func createProject(named name:String) {
+        let name=name.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let project=JarvisProject(name:name);projects.append(project);projects.sort{$0.updated>$1.updated}
+        directoryProjectID=project.id;selectedPage="Chat directory"
+        Task { await persistOrganization() }
+    }
+    func renameProject(_ id:UUID,named name:String) {
+        let name=name.trimmingCharacters(in:.whitespacesAndNewlines);guard !name.isEmpty else { return }
+        guard let index=projects.firstIndex(where:{$0.id==id}) else { return }
+        projects[index].name=name;projects[index].updated=Date();Task { await persistOrganization() }
+    }
+    func deleteProject(_ id:UUID) {
+        projects.removeAll{$0.id==id}
+        for index in conversations.indices where conversations[index].projectID==id { conversations[index].projectID=nil }
+        if selectedProjectID==id { selectedProjectID=nil }
+        Task { await persistOrganization() }
+    }
+    func assignConversation(_ conversationID:UUID,to projectID:UUID?) {
+        guard let index=conversations.firstIndex(where:{$0.id==conversationID}) else { return }
+        conversations[index].projectID=projectID;conversations[index].updated=Date()
+        if conversationID==conversation { selectedProjectID=projectID }
+        Task { await persistOrganization() }
+    }
+    func clearChatHistory() {
+        newChat();archive=[];conversations=[];directoryProjectID=nil
+        Task { await command("clear",value:"chat");await persistOrganization() }
+    }
+    func renameConversation(_ id:UUID,named name:String) {
+        let name=name.trimmingCharacters(in:.whitespacesAndNewlines);guard !name.isEmpty else { return }
+        guard let index=conversations.firstIndex(where:{$0.id==id}) else { return }
+        conversations[index].title=name;conversations[index].updated=Date();Task { await persistOrganization() }
+    }
     func shutdown() { stop();Task { await model.unload() };runtime.stop() }
+    private func touchConversation(preview:String) {
+        let now=Date();let title=conversationTitle(preview)
+        if let index=conversations.firstIndex(where:{$0.id==conversation}) {
+            if conversations[index].title.isEmpty || conversations[index].title=="New conversation" { conversations[index].title=title }
+            conversations[index].preview=preview;conversations[index].updated=now;conversations[index].messageCount=max(conversations[index].messageCount,messages.count)
+        } else {
+            conversations.append(ConversationSummary(id:conversation,title:title,preview:preview,created:now,updated:now,messageCount:messages.count,projectID:selectedProjectID))
+        }
+        conversations.sort{$0.updated>$1.updated}
+        Task { await persistOrganization() }
+    }
+    private func rebuildConversationIndex() {
+        let grouped=Dictionary(grouping:archive,by:{$0.conversationID ?? legacyConversation})
+        for (id,group) in grouped {
+            let sorted=group.sorted{$0.created<$1.created};let firstUser=sorted.first(where:{$0.role=="user" && !$0.content.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty});let latest=sorted.last(where:{$0.role=="assistant" && !$0.content.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty}) ?? sorted.last
+            let created=sorted.first?.created ?? Date();let updated=sorted.last?.created ?? created
+            if let index=conversations.firstIndex(where:{$0.id==id}) {
+                if conversations[index].title.isEmpty || conversations[index].title=="New conversation" { conversations[index].title=conversationTitle(firstUser?.content ?? "New conversation") }
+                conversations[index].preview=latest?.content ?? conversations[index].preview;conversations[index].created=min(conversations[index].created,created);conversations[index].updated=max(conversations[index].updated,updated);conversations[index].messageCount=group.count
+            } else {
+                conversations.append(ConversationSummary(id:id,title:conversationTitle(firstUser?.content ?? "New conversation"),preview:latest?.content ?? "",created:created,updated:updated,messageCount:group.count))
+            }
+        }
+        let available=Set(grouped.keys);conversations=conversations.filter{available.contains($0.id) || $0.id==conversation};conversations.sort{$0.updated>$1.updated}
+    }
+    private func conversationTitle(_ text:String)->String {
+        let first=text.split(whereSeparator:\.isNewline).joined(separator:" ").trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !first.isEmpty else { return "New conversation" }
+        return first.count>52 ? String(first.prefix(51))+"…" : first
+    }
+    private func persistOrganization() async {
+        let state=OrganizationState(conversations:conversations,projects:projects,lastConversationID:conversations.contains(where:{$0.id==conversation}) ? conversation : nil)
+        guard let data=try? JSONEncoder().encode(state),let value=String(data:data,encoding:.utf8) else { return }
+        _=try? await broker.request(BrokerRequest("organization_save",value:value))
+    }
+    private func decodeOrganization(_ result:String?)->OrganizationState {
+        guard let row=decodeRows(result).first,let body=row["body"],let data=body.data(using:.utf8) else { return OrganizationState() }
+        return (try? JSONDecoder().decode(OrganizationState.self,from:data)) ?? OrganizationState()
+    }
     private func decodeRows(_ s:String?) -> [[String:String]] { guard let d=s?.data(using:.utf8) else { return [] };return (try? JSONDecoder().decode([[String:String]].self,from:d)) ?? [] }
 }
