@@ -1,0 +1,26 @@
+{
+  "synthetic_roundtrip": [
+    {
+      "trial": 0,
+      "tts_seconds": 3.5866753340233117,
+      "stt_seconds": 0.44544579202192836,
+      "transcript": "Please remind me to review my notes tomorrow morning.",
+      "error": null
+    },
+    {
+      "trial": 1,
+      "tts_seconds": 0.1128558750206139,
+      "stt_seconds": 0.4268208749999758,
+      "transcript": "Please remind me to review my notes tomorrow morning.",
+      "error": null
+    },
+    {
+      "trial": 2,
+      "tts_seconds": 0.11182445799931884,
+      "stt_seconds": 0.42509829200571403,
+      "transcript": "Please remind me to review my notes tomorrow morning.",
+      "error": null
+    }
+  ],
+  "human_english_telugu_mixed_test": "pending"
+}

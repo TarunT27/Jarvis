@@ -1,0 +1,98 @@
+{
+  "generated": "2026-09-10T00:17:07-0400",
+  "model_trials": [
+    {
+      "case": 0,
+      "first_token_seconds": 3.4496586250024848,
+      "total_seconds": 3.6645384159928653,
+      "answer": "Hello! How can I help you today?",
+      "eval_count": 10,
+      "eval_duration_ns": 215144000
+    },
+    {
+      "case": 1,
+      "first_token_seconds": 0.219107333017746,
+      "total_seconds": 0.792061291023856,
+      "answer": "A calendar reminder notifies you at a specified time or on a specific date so you don't forget an upcoming event or task.",
+      "eval_count": 26,
+      "eval_duration_ns": 572870000
+    },
+    {
+      "case": 2,
+      "first_token_seconds": 0.13863666701945476,
+      "total_seconds": 0.18495654201251455,
+      "answer": "45",
+      "eval_count": 3,
+      "eval_duration_ns": 46331000
+    },
+    {
+      "case": 3,
+      "first_token_seconds": 0.1406209580018185,
+      "total_seconds": 0.4158004999917466,
+      "answer": "I need to finish preparing my notes before my noon meeting.",
+      "eval_count": 13,
+      "eval_duration_ns": 275106000
+    },
+    {
+      "case": 4,
+      "first_token_seconds": 0.1408978340041358,
+      "total_seconds": 1.1699976249947213,
+      "answer": "I apologize, but I don't have information about your meeting schedule for tomorrow. Could you please specify which meeting you are referring to or provide more details? Once I have that information, I will do my best to assist you.",
+      "eval_count": 47,
+      "eval_duration_ns": 1028997000
+    }
+  ],
+  "loaded_models": {
+    "models": [
+      {
+        "name": "qwen3.5:9b",
+        "model": "qwen3.5:9b",
+        "size": 5746049677,
+        "digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35",
+          "families": [
+            "qwen35"
+          ],
+          "parameter_size": "9.7B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2026-09-10T00:22:07.998467-04:00",
+        "size_vram": 5746049677,
+        "context_length": 8192
+      }
+    ]
+  },
+  "installed_models": {
+    "models": [
+      {
+        "name": "qwen3.5:9b",
+        "model": "qwen3.5:9b",
+        "modified_at": "2026-09-10T00:15:26.961911326-04:00",
+        "size": 6594474711,
+        "digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35",
+          "families": [
+            "qwen35"
+          ],
+          "parameter_size": "9.7B",
+          "quantization_level": "Q4_K_M",
+          "context_length": 262144,
+          "embedding_length": 4096
+        },
+        "capabilities": [
+          "vision",
+          "completion",
+          "tools",
+          "thinking"
+        ]
+      }
+    ]
+  },
+  "limits": "Synthetic prompts only. Human Telugu recognition and 30-minute thermal validation pending."
+}
