@@ -33,17 +33,33 @@ cat > "$ENTITLEMENTS" <<'PLIST'
 </dict>
 </plist>
 PLIST
-# An ad-hoc signature changes its cdhash on every rebuild, and macOS keys both TCC grants
-# and Keychain ACLs to the code identity - so each rebuild looks like a brand new app and
-# re-asks for the microphone and the Keychain password. A stable self-signed identity fixes
-# both. Use one when it exists; otherwise fall back to ad-hoc so the build never breaks.
-IDENTITY="${JARVIS_SIGNING_IDENTITY:-Jarvis Local Signing}"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
-    SIGN_AS="$IDENTITY"
-    printf 'Signing with stable identity: %s\n' "$IDENTITY"
+# An ad-hoc signature's designated requirement is nothing but its cdhash:
+#     designated => cdhash H"0a7131c2..."
+# macOS keys TCC grants and Keychain ACLs to that requirement, so any change to the binary
+# produces a new hash, and the microphone permission and Keychain approval are both asked
+# for again. A real signing identity makes the requirement identifier-plus-certificate
+# based instead, which survives rebuilds.
+#
+# Prefer an Apple Development certificate (free with any Apple ID, via Xcode > Settings >
+# Accounts > Manage Certificates), then any self-signed identity named below. Falls back to
+# ad-hoc so the build never breaks. Override with JARVIS_SIGNING_IDENTITY.
+pick_identity() {
+    if [ -n "${JARVIS_SIGNING_IDENTITY:-}" ]; then printf '%s' "$JARVIS_SIGNING_IDENTITY"; return; fi
+    local available
+    available="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+    for candidate in "Apple Development" "Developer ID Application" "Jarvis Local Signing"; do
+        if printf '%s' "$available" | grep -q "$candidate"; then printf '%s' "$candidate"; return; fi
+    done
+    printf '%s' "-"
+}
+SIGN_AS="$(pick_identity)"
+if [ "$SIGN_AS" = "-" ]; then
+    printf 'Signing ad-hoc: no code-signing identity found.\n'
+    printf '  The microphone permission and Keychain approval will be asked for again after\n'
+    printf '  any rebuild that changes the binary. Run ./scripts/check-signing-identity.sh\n'
+    printf '  to see how to create one.\n'
 else
-    SIGN_AS="-"
-    printf 'Signing ad-hoc (no "%s" identity found). Microphone and Keychain approval will be asked again after each rebuild.\n' "$IDENTITY"
+    printf 'Signing with stable identity: %s\n' "$SIGN_AS"
 fi
 # The broker never records; it stays without the microphone entitlement.
 codesign --force --sign "$SIGN_AS" --options runtime "$APP/Contents/XPCServices/JarvisBroker.xpc"
