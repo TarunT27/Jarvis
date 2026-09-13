@@ -197,14 +197,16 @@ struct ChatView: View {
                         Button("Remove") { assistant.screenImage = nil }
                     }.font(.caption).foregroundStyle(JarvisTheme.secondary)
                 }
-                if assistant.recording {
+                if assistant.conversationActive {
+                    conversationBar
+                } else if assistant.recording {
                     listeningHeader
                 } else if assistant.awaitingTranscriptReview {
                     transcriptHeader
                 } else if let presence = assistant.voicePresenceState {
                     presenceRow(presence)
                 }
-                TextField("Ask Jarvis, or tap the microphone…", text: $assistant.input, axis: .vertical)
+                TextField("Ask Jarvis, or tap the microphone to talk…", text: $assistant.input, axis: .vertical)
                     .font(.system(size: bodySize)).textFieldStyle(.plain).lineLimit(1...5)
                     .padding(.horizontal, 4).padding(.top, 3)
                     .onSubmit { assistant.send() }
@@ -217,7 +219,8 @@ struct ChatView: View {
             .animation(JarvisMotion.settling(reduceMotion), value: assistant.voicePresenceState)
             .animation(JarvisMotion.settling(reduceMotion), value: assistant.awaitingTranscriptReview)
             HStack(spacing: 8) {
-                Text(assistant.recording ? "Tap the microphone to finish" : "Press \(shortcut) to talk")
+                Text(assistant.conversationActive ? "Tap the microphone to end · \(shortcut)"
+                     : assistant.recording ? "Tap the microphone to finish" : "Press \(shortcut) to talk")
                 Text("·")
                 Text(assistant.status).lineLimit(1)
                     .accessibilityIdentifier("chat.status")
@@ -226,6 +229,62 @@ struct ChatView: View {
         .frame(maxWidth: measure)
         .padding(.horizontal, 32).padding(.top, 12).padding(.bottom, 18)
         .frame(maxWidth: .infinity)
+    }
+
+    /// One bar for the whole conversation. Listening, thinking and speaking are the same
+    /// state to a person in the middle of talking, so the panel does not reshuffle
+    /// between them - only the label and the meter change.
+    private var conversationBar: some View {
+        HStack(spacing: 12) {
+            VoiceLevelBars(level: assistant.voiceLevel,
+                           paused: assistant.micPaused,
+                           pulse: !assistant.recording && !assistant.micPaused)
+            Text(conversationLabel)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced)).tracking(1.6)
+                .foregroundStyle(conversationTint)
+                .contentTransition(.identity)
+            if assistant.recording && !assistant.micPaused {
+                Text(elapsedLabel).font(.caption).monospacedDigit().foregroundStyle(JarvisTheme.tertiary)
+            }
+            Spacer(minLength: 8)
+            Button { assistant.toggleMicPause() } label: {
+                Label(assistant.micPaused ? "Resume" : "Pause",
+                      systemImage: assistant.micPaused ? "mic" : "mic.slash")
+                    .font(.caption).labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain).foregroundStyle(JarvisTheme.secondary)
+            .disabled(!assistant.recording)
+            .opacity(assistant.recording ? 1 : 0.4)
+            .help(assistant.micPaused ? "Start hearing again" : "Stop hearing without ending the conversation")
+            .accessibilityIdentifier("chat.mic-pause")
+            Button { assistant.endConversation() } label: {
+                Label("End", systemImage: "xmark").font(.caption).labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain).foregroundStyle(JarvisTheme.secondary)
+            .help("End the conversation")
+            .accessibilityIdentifier("chat.end-conversation")
+        }
+        .padding(.bottom, 14)
+        .overlay(alignment: .bottom) { Divider().overlay(JarvisTheme.border) }
+        .transition(.opacity)
+        .animation(JarvisMotion.nudging(reduceMotion), value: assistant.recording)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Spoken conversation")
+        .accessibilityValue(conversationLabel.capitalized)
+    }
+
+    private var conversationLabel: String {
+        if assistant.micPaused { return "PAUSED" }
+        if assistant.recording { return "LISTENING" }
+        if assistant.status.hasPrefix("Speaking") { return "SPEAKING" }
+        if assistant.busy { return "THINKING" }
+        return "READY"
+    }
+
+    private var conversationTint: Color {
+        if assistant.micPaused { return JarvisTheme.secondary }
+        if assistant.recording { return JarvisTheme.recording }
+        return JarvisTheme.accent
     }
 
     /// A live session, with everything needed to govern it: what it is doing, how long
@@ -304,6 +363,9 @@ struct ChatView: View {
                 Divider()
                 Button("Attach current screen", systemImage: "display") {
                     Task { await assistant.captureScreen() }
+                }
+                Button("Dictate one message", systemImage: "text.bubble") {
+                    assistant.startListening()
                 }
                 Button("Local response settings…", systemImage: "slider.horizontal.3") {
                     showingGenerationSettings = true
@@ -395,26 +457,24 @@ struct ChatView: View {
         Button { assistant.toggleListening() } label: {
             Image(systemName: voiceSymbol)
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(assistant.recording ? JarvisTheme.buttonInk : JarvisTheme.accent)
+                .foregroundStyle(assistant.conversationActive ? JarvisTheme.buttonInk : JarvisTheme.accent)
                 .frame(width: 42, height: 42)
-                .background(assistant.recording ? JarvisTheme.accent : JarvisTheme.surface, in: Circle())
+                .background(assistant.conversationActive ? JarvisTheme.accent : JarvisTheme.surface, in: Circle())
                 .overlay(Circle().strokeBorder(JarvisTheme.secondary.opacity(0.35), lineWidth: 0.5))
                 .contentShape(Circle())
-                .animation(JarvisMotion.nudging(reduceMotion), value: assistant.recording)
+                .animation(JarvisMotion.nudging(reduceMotion), value: assistant.conversationActive)
                 .animation(JarvisMotion.nudging(reduceMotion), value: assistant.micPaused)
         }
         .buttonStyle(.plain)
-        .help(assistant.recording ? "Finish recording (\(shortcut))" : "Start recording (\(shortcut))")
-        .accessibilityLabel(assistant.recording ? "Finish recording" : "Start recording")
-        .accessibilityValue(assistant.recording
-            ? (assistant.micPaused ? "Recording, microphone paused" : "Recording")
-            : "Microphone idle")
-        .accessibilityHint("Tap to start, tap again to finish. \(shortcut) does the same.")
+        .help(assistant.conversationActive ? "End the conversation (\(shortcut))" : "Talk to Jarvis (\(shortcut))")
+        .accessibilityLabel(assistant.conversationActive ? "End conversation" : "Start a spoken conversation")
+        .accessibilityValue(assistant.conversationActive ? conversationLabel.capitalized : "Microphone idle")
+        .accessibilityHint("Tap to start talking, tap again to end. \(shortcut) does the same.")
         .accessibilityIdentifier("chat.hold-to-talk")
     }
 
     private var voiceSymbol: String {
-        guard assistant.recording else { return "mic" }
+        guard assistant.conversationActive else { return "mic" }
         return assistant.micPaused ? "mic.slash.fill" : "mic.fill"
     }
 }
@@ -424,20 +484,32 @@ struct ChatView: View {
 private struct VoiceLevelBars: View {
     let level: CGFloat
     var paused = false
+    /// Thinking and speaking have no microphone level to show. Left alone the meter
+    /// would sit dead through the half of the exchange Jarvis is doing the work, so it
+    /// breathes instead - the one place `breathe` is used outside the mark.
+    var pulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var breathing = false
 
     private let weights: [CGFloat] = [0.34, 0.68, 1.0, 0.52, 0.82, 0.28]
+
+    private func height(_ weight: CGFloat) -> CGFloat {
+        if paused { return 6 }
+        if pulse { return 6 + (reduceMotion ? 5 : (breathing ? 11 : 4)) * weight }
+        return 6 + (reduceMotion ? 6 : max(0, min(1, level)) * 16) * weight
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 3) {
             ForEach(Array(weights.enumerated()), id: \.offset) { _, weight in
-                Capsule()
-                    .frame(width: 3, height: 6 + (paused ? 0 : reduceMotion ? 6 : max(0, min(1, level)) * 16) * weight)
+                Capsule().frame(width: 3, height: height(weight))
             }
         }
         .frame(height: 22, alignment: .bottom)
         .foregroundStyle(paused ? JarvisTheme.disabled : JarvisTheme.accent)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: level)
+        .animation(JarvisMotion.breathing(reduceMotion), value: breathing)
+        .onAppear { breathing = true }
         .accessibilityHidden(true)
     }
 }

@@ -26,6 +26,9 @@ import ScreenCaptureKit
     var recording=false
     /// Within an open session, the hardware is stopped and nothing is being heard.
     var micPaused=false
+    /// A spoken conversation is running: Jarvis listens, answers aloud, and listens
+    /// again without being asked each time.
+    var conversationActive=false
     /// Seconds of audio held in the current session, excluding paused time.
     var listeningElapsed:TimeInterval=0
     /// True between a finished transcription and the user sending it. Speech
@@ -74,6 +77,18 @@ import ScreenCaptureKit
     private var pauseBegan:Date?
     /// Sessions end here because the sample buffer stops retaining audio at the same point.
     private let listeningLimit=SampleBuffer.retentionSeconds
+    // Turn-taking. Whisper transcribes a finished utterance rather than a stream, so a
+    // conversation is chunked by listening for the gap at the end of a sentence.
+    /// Root-mean-square above this counts as speech.
+    private let speechLevel:Float=0.015
+    /// Quiet for this long, after speech was heard, ends the turn.
+    private let endOfTurnSilence:TimeInterval=1.1
+    /// Consecutive frames of speech before a turn is considered started, so a door
+    /// closing does not open one.
+    private let speechFramesRequired=3
+    private var speechFrames=0
+    private var heardSpeech=false
+    private var silenceBegan:Date?
     private var turns:[[String:Any]]=[]
     private var archive:[ChatMessage]=[]
 
@@ -165,7 +180,7 @@ import ScreenCaptureKit
                 error="Deep mode runs only on external power. Connect the charger, or switch off Deep to use the everyday model.";return
             }
         }
-        stop();let id=UUID();epoch=id;activeID=id;busy=true;input="";error=nil
+        teardown();let id=UUID();epoch=id;activeID=id;busy=true;input="";error=nil
         let notes=attachedNotes;attachedNotes=[]
         let privateInput=promptIsPrivate || !notes.isEmpty;promptIsPrivate=false
         var user=ChatMessage(role:"user",content:text,conversationID:conversation)
@@ -282,28 +297,54 @@ import ScreenCaptureKit
             }
             throw JarvisError.message("Reached the six-step task limit. Ask for a smaller next step.")
         } catch is CancellationError {} catch { if epoch==id { self.error=error.localizedDescription } }
-        if epoch==id { busy=false;status="Ready";proposal=nil;activeID=nil }
+        if epoch==id {
+            busy=false;status="Ready";proposal=nil;activeID=nil
+            // With spoken replies muted there is no playback to wait on, so the
+            // conversation takes its next turn from here instead.
+            if muted { resumeConversationTurn() }
+        }
         _=try? await broker.request(BrokerRequest("end",taskID:id))
     }
     func decide(_ approve:Bool) { approvalContinuation?.resume(returning:approve);approvalContinuation=nil }
-    func stop() {
+    /// The Stop control, Escape, and sleep. Ends a conversation as well as the turn.
+    func stop() { conversationActive=false;teardown();status="Stopped" }
+
+    /// Ends the current turn without deciding whether the conversation continues.
+    private func teardown() {
         let oldID=activeID
         epoch=UUID();work?.cancel();work=nil;speakTask?.cancel();speakTask=nil;recordingTask?.cancel();recordingTask=nil
         levelTask?.cancel();levelTask=nil;voiceLevel=0
         speech.cancel();voice.cancel();recording=false;busy=false;awaitingTranscriptReview=false
         micPaused=false;listeningElapsed=0;listeningStart=nil;pausedTotal=0;pauseBegan=nil
-        decide(false);proposal=nil;activeID=nil;status="Stopped"
+        speechFrames=0;heardSpeech=false;silenceBegan=nil
+        decide(false);proposal=nil;activeID=nil
         if let oldID { Task { _=try? await broker.request(BrokerRequest("end",taskID:oldID)) } }
     }
     func newChat() { selectedPage="Chat";stop();messages=[];turns=[];screenImage=nil;attachedNotes=[];promptIsPrivate=false;selectedProjectID=nil;conversation=UUID();awaitingTranscriptReview=false;status="Ready" }
     /// The single entry point for the microphone button and the shortcut.
     func toggleListening() {
-        if recording { finishListening() } else { startListening() }
+        if conversationActive { endConversation() } else { startConversation() }
     }
 
+    /// Opens the microphone and keeps it open: each time you stop speaking, Jarvis
+    /// answers aloud and then listens again, until you end it.
+    func startConversation() {
+        guard !conversationActive else { return }
+        stop()
+        conversationActive=true
+        startListening()
+    }
+
+    func endConversation() {
+        conversationActive=false
+        teardown()
+        status="Conversation ended"
+    }
+
+    /// One listening turn. In a conversation this is re-entered after every reply.
     func startListening() {
         guard !recording else { return }
-        stop()
+        teardown()
         recordingTask=Task {
             do {
                 try await voice.start()
@@ -311,7 +352,8 @@ import ScreenCaptureKit
                 guard !Task.isCancelled else { voice.discard();return }
                 recording=true;micPaused=false
                 listeningStart=Date();pausedTotal=0;pauseBegan=nil;listeningElapsed=0
-                status=Self.listeningStatus
+                speechFrames=0;heardSpeech=false;silenceBegan=nil
+                status=conversationActive ? Self.conversationStatus : Self.listeningStatus
                 beginVoiceLevelMonitoring()
             } catch {
                 if AVCaptureDevice.authorizationStatus(for:.audio) == .denied || AVCaptureDevice.authorizationStatus(for:.audio) == .restricted {
@@ -351,7 +393,14 @@ import ScreenCaptureKit
         status="Recording discarded"
     }
 
+    /// Called after a reply finishes, so the conversation takes its next turn.
+    private func resumeConversationTurn() {
+        guard conversationActive, !recording, !busy else { return }
+        startListening()
+    }
+
     static let listeningStatus="Listening · tap the microphone when you are done"
+    static let conversationStatus="Listening · just talk, and pause when you are done"
     func openMicrophoneSettings() {
         guard let url=URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else { return }
         NSWorkspace.shared.open(url)
@@ -369,12 +418,16 @@ import ScreenCaptureKit
         switch voice.capture() {
         case .audio(let wav): audio=wav
         case .notRecording: return
-        case .tooShort: status="Too brief - speak for a moment before finishing";return
+        case .tooShort:
+            status="Too brief - speak for a moment before finishing"
+            resumeConversationTurn();return
         case .silent(let device):
             // Silence from a live engine almost always means the wrong input device is
             // selected, so name it rather than blaming the speaker.
             status=device.map { "No sound reached \($0) - check System Settings → Sound → Input" }
                 ?? "No sound reached the microphone - check System Settings → Sound → Input"
+            // Do not loop on a misconfigured input: that would spin transcription forever.
+            conversationActive=false
             return
         }
         busy=true;status="Transcribing locally"
@@ -384,8 +437,16 @@ import ScreenCaptureKit
                 try Task.checkCancellation();busy=false
                 input=(result["text"] as? String ?? "").trimmingCharacters(in:.whitespacesAndNewlines)
                 if !input.isEmpty {
-                    awaitingTranscriptReview=true;status="Transcribed on this Mac · edit or send"
-                } else { status="No speech detected" }
+                    if conversationActive {
+                        // A conversation does not stop to ask permission to speak.
+                        send()
+                    } else {
+                        awaitingTranscriptReview=true;status="Transcribed on this Mac · edit or send"
+                    }
+                } else {
+                    status="No speech detected"
+                    resumeConversationTurn()
+                }
             } catch { busy=false;if !(error is CancellationError) { self.error=error.localizedDescription };status="Ready" }
         }
     }
@@ -397,16 +458,41 @@ import ScreenCaptureKit
                 try Task.checkCancellation();guard epoch==id,!muted,let encoded=result["audio"] as? String,let data=Data(base64Encoded:encoded) else { return }
                 try voice.play(data);status="Speaking · press the shortcut to interrupt"
                 while voice.isPlaying { try await Task.sleep(for:.milliseconds(100)) }
-                if epoch==id { status="Ready · all AI runs on this Mac" }
+                if epoch==id {
+                    status="Ready · all AI runs on this Mac"
+                    // Reopening only after playback ends is also what stops Jarvis
+                    // transcribing its own voice.
+                    resumeConversationTurn()
+                }
             } catch { if epoch==id,!(error is CancellationError) { self.error="Speech: "+error.localizedDescription;status="Ready" } }
         }
+    }
+
+    /// True on the first frame of the gap that follows a finished utterance. Speech has
+    /// to be heard first, so opening the microphone into a quiet room waits rather than
+    /// firing an empty turn immediately.
+    private func detectedEndOfTurn(_ level:Float) -> Bool {
+        if level >= speechLevel {
+            speechFrames += 1
+            if speechFrames >= speechFramesRequired { heardSpeech=true }
+            silenceBegan=nil
+            return false
+        }
+        speechFrames=0
+        guard heardSpeech else { return false }
+        guard let began=silenceBegan else { silenceBegan=Date();return false }
+        return Date().timeIntervalSince(began) >= endOfTurnSilence
     }
 
     private func beginVoiceLevelMonitoring() {
         levelTask?.cancel()
         levelTask=Task { @MainActor [weak self] in
             while let self, self.recording, !Task.isCancelled {
-                self.voiceLevel=self.micPaused ? 0 : min(1,CGFloat(self.voice.level) * 8)
+                let level=self.voice.level
+                self.voiceLevel=self.micPaused ? 0 : min(1,CGFloat(level) * 8)
+                if self.conversationActive, !self.micPaused, self.detectedEndOfTurn(level) {
+                    self.finishListening();return
+                }
                 if let start=self.listeningStart {
                     let paused=self.pausedTotal + (self.pauseBegan.map { Date().timeIntervalSince($0) } ?? 0)
                     self.listeningElapsed=max(0,Date().timeIntervalSince(start) - paused)
