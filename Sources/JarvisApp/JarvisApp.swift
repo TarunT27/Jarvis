@@ -59,6 +59,43 @@ struct MainView:View {
     }
 
     var body:some View {
+        ZStack {
+            windowContent
+                // Together these are what .sheet gave for free: nothing behind the
+                // approval can be clicked, tabbed into, or reached by VoiceOver - and
+                // disabling also suppresses the Stop button's Escape shortcut, so
+                // Escape means Decline and nothing else while this is up.
+                .disabled(assistant.proposal != nil)
+                .accessibilityHidden(assistant.proposal != nil)
+            if let proposal=assistant.proposal { approvalOverlay(proposal) }
+        }
+        .animation(JarvisMotion.settling(reduceMotion), value: assistant.proposal?.id)
+    }
+
+    /// The approval grows out of the conversation it interrupted rather than sliding in
+    /// from the window edge, because the thing it is asking about is behind it.
+    private func approvalOverlay(_ proposal:ActionProposal) -> some View {
+        ZStack {
+            Rectangle().fill(Color.black.opacity(0.38))
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                // Swallows the click. There is deliberately no dismiss-by-clicking-away:
+                // the only ways out are Decline and Approve.
+                .onTapGesture {}
+                .transition(.opacity)
+                .accessibilityHidden(true)
+            ApprovalView(proposal:proposal) { assistant.decide($0) }
+                .transition(reduceMotion ? .opacity
+                    : .scale(scale:0.94,anchor:.bottom)
+                        .combined(with:.offset(y:14))
+                        .combined(with:.opacity))
+        }
+        .accessibilityElement(children:.contain)
+        .accessibilityAddTraits(.isModal)
+        .accessibilityLabel("Review this action")
+    }
+
+    private var windowContent:some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .padding(.horizontal,14)
@@ -97,7 +134,6 @@ struct MainView:View {
         } message: {
             Text("Jarvis needs microphone access to listen. Enable Jarvis in System Settings → Privacy & Security → Microphone, then try again.")
         }
-        .sheet(item:$assistant.proposal) { proposal in ApprovalView(proposal:proposal) { assistant.decide($0) }.interactiveDismissDisabled() }
         .sheet(isPresented:$showingNewProject) { NewProjectView { assistant.createProject(named:$0) } }
     }
 
@@ -247,6 +283,12 @@ private struct SidebarStatusMenu: View {
     }
 }
 
+/// Reports the argument table's natural height so the card can hug it.
+private struct FieldTableHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 /// User-facing copy for the one screen where a local assistant stops being local.
 /// Every tool that reaches this sheet gets a sentence describing what will happen
 /// and, when it leaves the machine, where it goes.
@@ -298,6 +340,7 @@ struct ApprovalView:View {
     let proposal:ActionProposal
     let decide:(Bool)->Void
     @FocusState private var focus:Field?
+    @State private var tableHeight:CGFloat=0
     private enum Field { case decline }
 
     var body:some View {
@@ -329,8 +372,42 @@ struct ApprovalView:View {
 
             destination.padding(.bottom,22)
 
+            // A ScrollView takes every point it is offered, and in the window it is
+            // offered the whole height - so the table stretched, with the arguments
+            // floating in empty space. Measuring the table and asking for exactly that
+            // height, capped, keeps the card tight and still lets a long body scroll.
             ScrollView {
-                VStack(alignment:.leading,spacing:0) {
+                fieldTable(proposal)
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key:FieldTableHeight.self,value:geometry.size.height)
+                    })
+            }
+            .frame(height:min(max(tableHeight,40),320))
+            .onPreferenceChange(FieldTableHeight.self) { tableHeight=$0 }
+            .scrollBounceBehavior(.basedOnSize)
+            .background(JarvisTheme.surface,in:RoundedRectangle(cornerRadius:11,style:.continuous))
+            .padding(.bottom,18)
+
+            Text("Applies once, to exactly these values. Approving does not grant Jarvis standing access.")
+                .font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary)
+                .padding(.bottom,22)
+            buttons(remaining:remaining)
+        }
+        .padding(28).frame(width:520)
+        .foregroundStyle(JarvisTheme.text)
+        .tint(JarvisTheme.selection)
+        // A sheet was clipped and shadowed by macOS. Presented in the window it has to
+        // carry its own edge, or it reads as a rectangle pasted over the conversation.
+        .background(JarvisTheme.elevated,in:RoundedRectangle(cornerRadius:16,style:.continuous))
+        .overlay(RoundedRectangle(cornerRadius:16,style:.continuous).strokeBorder(JarvisTheme.border,lineWidth:1))
+        .shadow(color:.black.opacity(0.45),radius:40,y:18)
+        // Return must not be able to send an email. Nothing claims the default
+        // action; the focus ring starts on Decline.
+        .defaultFocus($focus,.decline)
+    }
+
+    private func fieldTable(_ proposal:ActionProposal) -> some View {
+        VStack(alignment:.leading,spacing:0) {
                     ForEach(Array(ApprovalCopy.fields(proposal.call).enumerated()),id:\.element) { index,key in
                         if index>0 { Divider().overlay(JarvisTheme.border).padding(.horizontal,16) }
                         HStack(alignment:.top,spacing:14) {
@@ -345,19 +422,15 @@ struct ApprovalView:View {
                                 .frame(maxWidth:.infinity,alignment:.leading)
                         }.padding(.horizontal,16).padding(.vertical,12)
                     }
-                }
-            }
-            .frame(maxHeight:320)
-            .background(JarvisTheme.surface,in:RoundedRectangle(cornerRadius:11,style:.continuous))
-            .padding(.bottom,18)
+        }
+    }
 
-            Text("Applies once, to exactly these values. Approving does not grant Jarvis standing access.")
-                .font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary)
-                .padding(.bottom,22)
-
+    @ViewBuilder
+    private func buttons(remaining:TimeInterval) -> some View {
             HStack {
                 Button("Decline",role:.cancel) { decide(false) }
                     .controlSize(.large)
+                    .keyboardShortcut(.cancelAction)
                     .focused($focus,equals:.decline)
                 Spacer()
                 // Antique bronze, not pearl: this is the primary action, but it
@@ -378,15 +451,6 @@ struct ApprovalView:View {
                 .disabled(remaining<=0)
                 .accessibilityIdentifier("approval.approve")
             }
-        }
-        .padding(28).frame(width:520)
-        .foregroundStyle(JarvisTheme.text)
-        .tint(JarvisTheme.selection)
-        // The sheet is a raised surface, not another sheet of canvas.
-        .background(JarvisTheme.elevated)
-        // Return must not be able to send an email. Nothing claims the default
-        // action; the focus ring starts on Decline.
-        .defaultFocus($focus,.decline)
     }
 
     private var approveTitle:String {
