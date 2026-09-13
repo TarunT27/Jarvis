@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import AVFAudio
+import CoreAudio
 import JarvisCore
 import Carbon
 
@@ -54,6 +55,9 @@ final class SpeechWorker: @unchecked Sendable {
     }
 }
 final class SampleBuffer: @unchecked Sendable {
+    /// Audio past this point is dropped on the floor. A held session must end here too,
+    /// or the interface would go on saying "listening" while nothing is being kept.
+    static let retentionSeconds: Double = 90
     let lock=NSLock(); var samples=[Float](); var sampleRate: Double=48000; private var rms:Float=0
     func append(_ buffer: AVAudioPCMBuffer) {
         guard let channel=buffer.floatChannelData?[0] else { return }
@@ -66,7 +70,7 @@ final class SampleBuffer: @unchecked Sendable {
             let frameRMS=sqrt(sum / Float(count))
             rms=max(frameRMS,rms * 0.82)
         }
-        if samples.count < Int(sampleRate * 90) { samples.append(contentsOf:UnsafeBufferPointer(start:channel,count:count)) }
+        if samples.count < Int(sampleRate * SampleBuffer.retentionSeconds) { samples.append(contentsOf:UnsafeBufferPointer(start:channel,count:count)) }
     }
     var level:Float { lock.lock(); defer { lock.unlock() }; return rms }
     func take() -> ([Float],Double) { lock.lock(); defer { lock.unlock() }; let s=samples; samples=[]; rms=0; return(s,sampleRate) }
@@ -80,20 +84,81 @@ final class SampleBuffer: @unchecked Sendable {
     func requestPermission() async -> Bool {
         await AVAudioApplication.requestRecordPermission()
     }
+    /// True from the moment a session begins until it is captured or discarded. It stays
+    /// true while the session is paused, when no engine is running at all.
+    private(set) var sessionActive=false
+
     func start() async throws {
         stopPlayback()
         guard await requestPermission() else { throw JarvisError.message("Microphone access is off. Enable Jarvis in System Settings → Privacy & Security → Microphone.") }
         _=buffer.take()
-        let e=AVAudioEngine(); let node=e.inputNode; let format=node.outputFormat(forBus:0)
-        guard format.sampleRate > 0 else { throw JarvisError.message("No microphone is available.") }
-        node.installTap(onBus:0,bufferSize:2048,format:format) { [buffer] b,_ in buffer.append(b) }
+        try startEngine()
+        sessionActive=true
+    }
+
+    /// Stops the hardware and keeps everything captured so far. The macOS recording
+    /// indicator goes out, which is the honest signal: while paused, nothing is heard.
+    func pause() { teardownEngine() }
+
+    /// Restarts the hardware on an existing session, appending to what is already held.
+    func resume() throws { try startEngine() }
+
+    var isCapturing: Bool { engine != nil }
+
+    private func startEngine() throws {
+        let e=AVAudioEngine(); let node=e.inputNode
+        // inputFormat, not outputFormat. outputFormat(forBus:) reports the format the node
+        // hands downstream, which follows the OUTPUT device. On a Bluetooth headset the two
+        // disagree - AirPods run their microphone at 24 kHz in hands-free mode while the
+        // output chain stays at 48 kHz - and a tap installed with the wrong format is handed
+        // silence, with no error anywhere. Passing nil below lets the engine supply the
+        // node's own format, so this cannot drift apart again.
+        let format=node.inputFormat(forBus:0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw JarvisError.message("No microphone is available. Check System Settings → Sound → Input.")
+        }
+        node.installTap(onBus:0,bufferSize:2048,format:nil) { [buffer] b,_ in buffer.append(b) }
         e.prepare(); try e.start(); engine=e
     }
-    func stopRecording() -> Data? {
-        guard let engine else { return nil }
+
+    private func teardownEngine() {
+        guard let engine else { return }
         engine.inputNode.removeTap(onBus:0); engine.stop(); self.engine=nil
+    }
+    /// Why a recording produced nothing, so the status line can say something useful
+    /// instead of "No speech detected" for four different causes.
+    enum CaptureOutcome {
+        case audio(Data)
+        case notRecording
+        case tooShort
+        case silent(device: String?)
+    }
+    /// The default input device's name, for a failure message that can be acted on.
+    static func defaultInputName() -> String? {
+        var device=AudioDeviceID(0)
+        var size=UInt32(MemoryLayout<AudioDeviceID>.size)
+        var deviceAddress=AudioObjectPropertyAddress(mSelector:kAudioHardwarePropertyDefaultInputDevice,
+                                                     mScope:kAudioObjectPropertyScopeGlobal,
+                                                     mElement:kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),&deviceAddress,0,nil,&size,&device)==noErr else { return nil }
+        var name:Unmanaged<CFString>?
+        var nameSize=UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var nameAddress=AudioObjectPropertyAddress(mSelector:kAudioObjectPropertyName,
+                                                   mScope:kAudioObjectPropertyScopeGlobal,
+                                                   mElement:kAudioObjectPropertyElementMain)
+        let status=withUnsafeMutablePointer(to:&name) {
+            AudioObjectGetPropertyData(device,&nameAddress,0,nil,&nameSize,$0)
+        }
+        guard status==noErr, let value=name?.takeRetainedValue() as String?, !value.isEmpty else { return nil }
+        return value
+    }
+    func capture() -> CaptureOutcome {
+        guard sessionActive else { return .notRecording }
+        sessionActive=false
+        teardownEngine()
         let (samples,rate)=buffer.take()
-        guard samples.count > Int(rate*0.2), samples.contains(where:{ abs($0)>0.012 }) else { return nil }
+        guard samples.count > Int(rate*0.2) else { return .tooShort }
+        guard samples.contains(where:{ abs($0)>0.012 }) else { return .silent(device:Self.defaultInputName()) }
         // Resample mono capture to 16 kHz PCM WAV entirely in RAM.
         let count=Int(Double(samples.count)*16000/rate)
         var pcm=Data(capacity:count*2)
@@ -108,12 +173,14 @@ final class SampleBuffer: @unchecked Sendable {
         func u32(_ n:UInt32) { var v=n.littleEndian; withUnsafeBytes(of:&v) { wav.append(contentsOf:$0) } }
         func u16(_ n:UInt16) { var v=n.littleEndian; withUnsafeBytes(of:&v) { wav.append(contentsOf:$0) } }
         text("RIFF");u32(UInt32(36+pcm.count));text("WAVEfmt ");u32(16);u16(1);u16(1);u32(16000);u32(32000);u16(2);u16(16);text("data");u32(UInt32(pcm.count));wav.append(pcm)
-        return wav
+        return .audio(wav)
     }
+    /// Ends a session and throws its audio away without transcribing it.
+    func discard() { sessionActive=false; teardownEngine(); _=buffer.take() }
     func play(_ data:Data) throws { player=try AVAudioPlayer(data:data); player?.play() }
     var isPlaying:Bool { player?.isPlaying == true }
     func stopPlayback() { player?.stop();player=nil }
-    func cancel() { _=stopRecording();stopPlayback() }
+    func cancel() { discard();stopPlayback() }
 }
 @MainActor final class PushToTalkShortcut {
     private var reference: EventHotKeyRef?

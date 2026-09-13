@@ -2,6 +2,7 @@ import AppKit
 import CoreText
 import SwiftUI
 
+/// Keep the existing typography call sites, using the native system face for Quiet Workspace.
 enum JarvisTypography {
     enum Face:String {
         case extraLight = "Chillax-Extralight"
@@ -10,6 +11,17 @@ enum JarvisTypography {
         case medium = "Chillax-Medium"
         case semibold = "Chillax-Semibold"
         case bold = "Chillax-Bold"
+    }
+
+    private static func weight(_ face: Face) -> Font.Weight {
+        switch face {
+        case .extraLight: .ultraLight
+        case .light: .light
+        case .regular: .regular
+        case .medium: .medium
+        case .semibold: .semibold
+        case .bold: .bold
+        }
     }
 
     private static var registered = false
@@ -26,25 +38,7 @@ enum JarvisTypography {
         }
     }
 
-    static func font(_ face:Face = .regular, size:CGFloat, relativeTo style:Font.TextStyle = .body) -> Font {
-        Font.custom(face.rawValue, size: size, relativeTo: style)
-    }
-
     static func font(_ face: Face = .regular, style: Font.TextStyle) -> Font {
-        let size: CGFloat = switch style {
-        case .largeTitle: 34
-        case .title: 28
-        case .title2: 22
-        case .title3: 20
-        case .headline: 15
-        case .subheadline: 13
-        case .body: 15
-        case .callout: 14
-        case .caption: 12
-        case .caption2: 11
-        case .footnote: 12
-        @unknown default: 15
-        }
-        return font(face, size: size, relativeTo: style)
+        return Font.system(style, design: .default).weight(weight(face))
     }
 }

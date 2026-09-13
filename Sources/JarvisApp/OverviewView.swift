@@ -29,9 +29,9 @@ struct DashboardView: View {
         return modelAvailable ? "Available" : "Not ready"
     }
     private var readinessColor: Color {
-        if !assistant.unlocked { return .orange }
-        if assistant.error != nil || !modelAvailable { return .orange }
-        return assistant.recording ? .red : .teal
+        if !assistant.unlocked { return JarvisTheme.warning }
+        if assistant.error != nil || !modelAvailable { return JarvisTheme.warning }
+        return assistant.recording ? JarvisTheme.recording : JarvisTheme.healthy
     }
 
     var body: some View {
@@ -51,13 +51,13 @@ struct DashboardView: View {
                         recentPanel
                     }
                     Label("Only data already in Jarvis. No analytics leave your Mac.", systemImage: "lock")
-                        .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary)
+                        .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
                 }
                 .padding(geometry.size.width < 650 ? 20 : 28)
                 .frame(maxWidth: 1440)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(JarvisTheme.canvas)
         }
         .accessibilityIdentifier("overview")
     }
@@ -76,9 +76,9 @@ struct DashboardView: View {
     private var heading: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("ON YOUR MAC", systemImage: "desktopcomputer")
-                .font(JarvisTypography.font(.semibold, style: .caption2)).tracking(1.6).foregroundStyle(.secondary)
+                .font(JarvisTypography.font(.semibold, style: .caption2)).tracking(1.6).foregroundStyle(JarvisTheme.secondary)
             Text("Overview").font(JarvisTypography.font(.semibold, style: .largeTitle)).accessibilityAddTraits(.isHeader)
-            Text("A quiet place to see where things stand.").foregroundStyle(.secondary)
+            Text("A quiet place to see where things stand.").foregroundStyle(JarvisTheme.secondary)
         }
     }
 
@@ -110,11 +110,11 @@ struct DashboardView: View {
                 }
             OverviewMetricCard(title: "Current local model", value: assistant.deep ? "Qwen3.8 · 27B" : "Qwen3.5 · 9B",
                 detail: "\(assistant.deep ? "Deep" : "Everyday") · \(modelAvailable ? "installed" : "not installed")",
-                symbol: "cpu", tint: .teal)
+                symbol: "cpu", tint: JarvisTheme.information)
             OverviewMetricCard(title: "Conversation", value: assistant.messages.count.formatted(),
-                detail: "Messages in the available conversation", symbol: "bubble.left.and.bubble.right", tint: .teal)
+                detail: "Messages in the available conversation", symbol: "bubble.left.and.bubble.right", tint: JarvisTheme.information)
             OverviewMetricCard(title: "Approved access", value: (assistant.folders.count + assistant.apps.count).formatted(),
-                detail: "\(assistant.folders.count) folders · \(assistant.apps.count) apps", symbol: "folder.badge.gearshape", tint: .teal)
+                detail: "\(assistant.folders.count) folders · \(assistant.apps.count) apps", symbol: "folder.badge.gearshape", tint: JarvisTheme.information)
         }
     }
 
@@ -125,15 +125,15 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 16) { activityHeading; rangePicker }
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(activity.total.formatted()).font(JarvisTypography.font(.semibold, style: .largeTitle).monospacedDigit()).monospacedDigit()
-                Text("messages").font(JarvisTypography.font(.regular, style: .callout)).foregroundStyle(.secondary)
+                Text(activity.total.formatted()).contentTransition(.numericText()).animation(JarvisMotion.nudging(reduceMotion), value: activity.total).font(JarvisTypography.font(.semibold, style: .largeTitle).monospacedDigit()).monospacedDigit()
+                Text("messages").font(JarvisTypography.font(.regular, style: .callout)).foregroundStyle(JarvisTheme.secondary)
                 Spacer()
                 if let selected = selectedDay {
                     Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) · \(selected.count) messages")
-                        .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary).monospacedDigit()
+                        .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary).monospacedDigit()
                 } else {
                     Text("\(activity.activeDays) active \(activity.activeDays == 1 ? "day" : "days")")
-                        .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary)
+                        .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
                 }
             }.accessibilityElement(children: .combine)
             chart
@@ -141,10 +141,10 @@ struct DashboardView: View {
                 Image(systemName: activity.total == 0 ? "bubble.left" : "info.circle").accessibilityHidden(true)
                 Text(activity.total == 0 ? "No messages in this range. Start a conversation to see activity here." : "Counts your messages and Jarvis replies by local date.")
                     .fixedSize(horizontal: false, vertical: true)
-            }.font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary)
+            }.font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
             Divider()
             Text("Based on the conversation currently available to the app, including up to 50 restored messages. A longer range does not recover expired history.")
-                .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .overviewPanel()
     }
@@ -152,7 +152,7 @@ struct DashboardView: View {
     private var activityHeading: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Message activity").font(JarvisTypography.font(.semibold, style: .headline)).accessibilityAddTraits(.isHeader)
-            Text("The last \(range.rawValue) days").font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary)
+            Text("The last \(range.rawValue) days").font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
         }
     }
 
@@ -175,17 +175,17 @@ struct DashboardView: View {
         Chart {
             ForEach(activity.days) { day in
                 AreaMark(x: .value("Date", day.date), y: .value("Messages", day.count))
-                    .foregroundStyle(LinearGradient(colors: [.teal.opacity(0.20), .teal.opacity(0.015)], startPoint: .top, endPoint: .bottom))
+                    .foregroundStyle(LinearGradient(colors: [JarvisTheme.information.opacity(0.20), JarvisTheme.information.opacity(0.015)], startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.linear)
                     .accessibilityHidden(true)
                 LineMark(x: .value("Date", day.date), y: .value("Messages", day.count))
-                    .foregroundStyle(.teal).lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .foregroundStyle(JarvisTheme.information).lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
                     .interpolationMethod(.linear)
                     .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
                     .accessibilityValue("\(day.count) messages")
                 if day.count > 0 {
                     PointMark(x: .value("Date", day.date), y: .value("Messages", day.count))
-                        .foregroundStyle(.teal).symbolSize(24).accessibilityHidden(true)
+                        .foregroundStyle(JarvisTheme.information).symbolSize(24).accessibilityHidden(true)
                 }
             }
             if let day = selectedDay {
@@ -205,7 +205,7 @@ struct DashboardView: View {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine().foregroundStyle(Color.primary.opacity(0.07))
                 AxisValueLabel {
-                    if let count = value.as(Int.self) { Text(count.formatted()).font(JarvisTypography.font(.regular, style: .caption2)).foregroundStyle(.secondary) }
+                    if let count = value.as(Int.self) { Text(count.formatted()).font(JarvisTypography.font(.regular, style: .caption2)).foregroundStyle(JarvisTheme.secondary) }
                 }
             }
         }
@@ -214,7 +214,7 @@ struct DashboardView: View {
         .accessibilityLabel("Message activity over the last \(range.rawValue) days")
         .accessibilityValue("\(activity.total) messages across \(activity.activeDays) active \(activity.activeDays == 1 ? "day" : "days"). Available conversation only.")
         .accessibilityIdentifier("overview.activity-chart")
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: range)
+        .animation(JarvisMotion.settling(reduceMotion), value: range)
     }
 
     private var recentPanel: some View {
@@ -222,7 +222,7 @@ struct DashboardView: View {
             HStack {
                 Text("Recent activity").font(JarvisTypography.font(.semibold, style: .headline)).accessibilityAddTraits(.isHeader)
                 Spacer()
-                Text("Latest \(recentMessages.count)").font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary)
+                Text("Latest \(recentMessages.count)").font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
             }
             if recentMessages.isEmpty {
                 ContentUnavailableView {
@@ -258,17 +258,20 @@ struct OverviewMetricCard: View {
     let detail: String
     let symbol: String
     let tint: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(title).font(JarvisTypography.font(.regular, style: .subheadline)).foregroundStyle(.secondary)
+                Text(title).font(JarvisTypography.font(.regular, style: .subheadline)).foregroundStyle(JarvisTheme.secondary)
                 Spacer(minLength: 8)
                 Image(systemName: symbol).font(.system(size: 15, weight: .medium)).foregroundStyle(tint).accessibilityHidden(true)
             }
             Text(value).font(JarvisTypography.font(.semibold, style: .title2)).monospacedDigit()
+                .contentTransition(.numericText())
+                .animation(JarvisMotion.nudging(reduceMotion), value: value)
                 .lineLimit(1).minimumScaleFactor(0.8)
-            Text(detail).font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(.secondary).lineLimit(2)
+            Text(detail).font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary).lineLimit(2)
                 .frame(minHeight: 30, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -284,18 +287,19 @@ private struct RecentMessageRow: View {
     let message: ChatMessage
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: message.role == "user" ? "person.crop.circle" : "waveform.circle")
-                .font(.system(size: 24, weight: .light))
-                .foregroundStyle(message.role == "user" ? Color.secondary : Color.teal)
-                .accessibilityHidden(true)
+            Group {
+                if message.role == "user" {
+                    Image(systemName: "person.crop.circle").font(.system(size: 24, weight: .light)).foregroundStyle(JarvisTheme.secondary)
+                } else { JarvisMark().frame(width: 24, height: 24) }
+            }.accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text(message.role == "user" ? "You" : "Jarvis").font(JarvisTypography.font(.medium, style: .subheadline))
                     Spacer()
                     Text(message.created, format: .dateTime.month(.abbreviated).day().hour().minute())
-                        .font(JarvisTypography.font(.regular, style: .caption2)).foregroundStyle(.secondary)
+                        .font(JarvisTypography.font(.regular, style: .caption2)).foregroundStyle(JarvisTheme.secondary)
                 }
-                Text(message.content).font(JarvisTypography.font(.regular, style: .callout)).foregroundStyle(.secondary)
+                Text(message.content).font(JarvisTypography.font(.regular, style: .callout)).foregroundStyle(JarvisTheme.secondary)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -306,8 +310,8 @@ private struct RecentMessageRow: View {
 private struct OverviewPanel: ViewModifier {
     func body(content: Content) -> some View {
         content.padding(20)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1) }
+            .background(JarvisTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(JarvisTheme.border, lineWidth: 1) }
     }
 }
 
