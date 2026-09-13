@@ -4,6 +4,21 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 swift build -c release
 APP="$PROJECT_DIR/Jarvis.app"
+# Replacing the executable of a RUNNING app kills it with SIGKILL (Code Signature
+# Invalid): the kernel validates each code page against the signature of the file
+# backing it, and overwriting that file invalidates every page not yet resident. The
+# process dies at its next page-in, with a crash report that looks like a memory bug
+# in whatever happened to be on screen. Stop it first.
+if pgrep -f "$APP/Contents/MacOS/Jarvis" >/dev/null 2>&1; then
+    printf 'Quitting the running Jarvis before replacing its binary.\n'
+    osascript -e 'quit app id "local.jarvis.mac"' >/dev/null 2>&1 || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -f "$APP/Contents/MacOS/Jarvis" >/dev/null 2>&1 || break
+        sleep 0.3
+    done
+    pkill -f "$APP/Contents/MacOS/Jarvis" >/dev/null 2>&1 || true
+    sleep 0.3
+fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/XPCServices/JarvisBroker.xpc/Contents/MacOS"
 cp .build/release/Jarvis "$APP/Contents/MacOS/Jarvis"
 cp .build/release/JarvisBroker "$APP/Contents/XPCServices/JarvisBroker.xpc/Contents/MacOS/JarvisBroker"
