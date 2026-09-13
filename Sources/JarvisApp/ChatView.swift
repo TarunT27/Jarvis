@@ -493,6 +493,12 @@ private struct VoiceLevelBars: View {
 
     private let weights: [CGFloat] = [0.34, 0.68, 1.0, 0.52, 0.82, 0.28]
 
+    private func startPulse(_ on: Bool) {
+        guard !reduceMotion else { breathing = on; return }
+        if on { withAnimation(JarvisMotion.breathe) { breathing = true } }
+        else { withAnimation(.easeOut(duration: 0.15)) { breathing = false } }
+    }
+
     private func height(_ weight: CGFloat) -> CGFloat {
         if paused { return 6 }
         if pulse { return 6 + (reduceMotion ? 5 : (breathing ? 11 : 4)) * weight }
@@ -508,8 +514,11 @@ private struct VoiceLevelBars: View {
         .frame(height: 22, alignment: .bottom)
         .foregroundStyle(paused ? JarvisTheme.disabled : JarvisTheme.accent)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: level)
-        .animation(JarvisMotion.breathing(reduceMotion), value: breathing)
-        .onAppear { breathing = true }
+        // The repeating animation has to be started when `pulse` turns on, not when the
+        // view appears: at appear time no height reads `breathing`, so there is nothing
+        // for the repeat to drive and the bars simply jump to the tall position later.
+        .onAppear { startPulse(pulse) }
+        .onChange(of: pulse) { _, on in startPulse(on) }
         .accessibilityHidden(true)
     }
 }
