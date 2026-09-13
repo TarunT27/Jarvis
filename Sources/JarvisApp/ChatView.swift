@@ -276,7 +276,7 @@ struct ChatView: View {
     private var conversationLabel: String {
         if assistant.micPaused { return "PAUSED" }
         if assistant.recording { return "LISTENING" }
-        if assistant.status.hasPrefix("Speaking") { return "SPEAKING" }
+        if assistant.speaking { return "SPEAKING" }
         if assistant.busy { return "THINKING" }
         return "READY"
     }
@@ -394,7 +394,9 @@ struct ChatView: View {
             if assistant.voicePresenceState == .speaking || assistant.muted {
                 Button {
                     assistant.muted.toggle()
-                    if assistant.muted { assistant.stop() }
+                    // Silences the reply in flight. It used to call stop(), which in a
+                    // conversation meant muting also ended the conversation.
+                    if assistant.muted { assistant.silenceSpeech() }
                 } label: {
                     Image(systemName: assistant.muted ? "speaker.slash" : "speaker.wave.2")
                         .frame(width: 28, height: 32)

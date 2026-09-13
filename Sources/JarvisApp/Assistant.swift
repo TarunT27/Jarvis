@@ -29,6 +29,9 @@ import ScreenCaptureKit
     /// A spoken conversation is running: Jarvis listens, answers aloud, and listens
     /// again without being asked each time.
     var conversationActive=false
+    /// A reply is being synthesised or played. The conversation must not reopen the
+    /// microphone until this clears, or Jarvis transcribes its own voice.
+    var speaking=false
     /// Seconds of audio held in the current session, excluding paused time.
     var listeningElapsed:TimeInterval=0
     /// True between a finished transcription and the user sending it. Speech
@@ -95,7 +98,7 @@ import ScreenCaptureKit
     var voicePresenceState:VoicePresenceState? {
         guard !muted else { return nil }
         if recording { return .listening }
-        if status.hasPrefix("Speaking") { return .speaking }
+        if speaking { return .speaking }
         if busy { return .thinking }
         return nil
     }
@@ -299,9 +302,9 @@ import ScreenCaptureKit
         } catch is CancellationError {} catch { if epoch==id { self.error=error.localizedDescription } }
         if epoch==id {
             busy=false;status="Ready";proposal=nil;activeID=nil
-            // With spoken replies muted there is no playback to wait on, so the
-            // conversation takes its next turn from here instead.
-            if muted { resumeConversationTurn() }
+            // Speech is started mid-turn and plays concurrently, so either this or the
+            // end of playback can be last. Both call in; the guard decides.
+            resumeConversationTurn()
         }
         _=try? await broker.request(BrokerRequest("end",taskID:id))
     }
@@ -314,7 +317,7 @@ import ScreenCaptureKit
         let oldID=activeID
         epoch=UUID();work?.cancel();work=nil;speakTask?.cancel();speakTask=nil;recordingTask?.cancel();recordingTask=nil
         levelTask?.cancel();levelTask=nil;voiceLevel=0
-        speech.cancel();voice.cancel();recording=false;busy=false;awaitingTranscriptReview=false
+        speech.cancel();voice.cancel();recording=false;busy=false;speaking=false;awaitingTranscriptReview=false
         micPaused=false;listeningElapsed=0;listeningStart=nil;pausedTotal=0;pauseBegan=nil
         speechFrames=0;heardSpeech=false;silenceBegan=nil
         decide(false);proposal=nil;activeID=nil
@@ -323,7 +326,20 @@ import ScreenCaptureKit
     func newChat() { selectedPage="Chat";stop();messages=[];turns=[];screenImage=nil;attachedNotes=[];promptIsPrivate=false;selectedProjectID=nil;conversation=UUID();awaitingTranscriptReview=false;status="Ready" }
     /// The single entry point for the microphone button and the shortcut.
     func toggleListening() {
-        if conversationActive { endConversation() } else { startConversation() }
+        guard conversationActive else { startConversation();return }
+        // Tapping the microphone while Jarvis is talking interrupts it and hands the
+        // turn back, which is what every voice assistant does. Ending is the explicit
+        // End control, so interrupting does not have to cost you the conversation.
+        if speaking { silenceSpeech() } else { endConversation() }
+    }
+
+    /// Stops a reply being spoken without ending the turn or the conversation.
+    func silenceSpeech() {
+        speakTask?.cancel();speakTask=nil
+        voice.stopPlayback()
+        speaking=false
+        status="Ready · all AI runs on this Mac"
+        resumeConversationTurn()
     }
 
     /// Opens the microphone and keeps it open: each time you stop speaking, Jarvis
@@ -362,6 +378,8 @@ import ScreenCaptureKit
                 } else {
                     self.error=error.localizedDescription
                 }
+                // Otherwise the bar keeps claiming a conversation that has no microphone.
+                conversationActive=false
             }
         }
     }
@@ -375,7 +393,7 @@ import ScreenCaptureKit
                 try voice.resume()
                 micPaused=false
                 if let began=pauseBegan { pausedTotal += Date().timeIntervalSince(began);pauseBegan=nil }
-                status=Self.listeningStatus
+                status=conversationActive ? Self.conversationStatus : Self.listeningStatus
             } catch { self.error=error.localizedDescription }
         } else {
             voice.pause();micPaused=true;pauseBegan=Date();voiceLevel=0
@@ -386,6 +404,7 @@ import ScreenCaptureKit
     /// Ends the session and throws the audio away. Nothing is transcribed or sent.
     func cancelListening() {
         guard recording else { return }
+        conversationActive=false
         levelTask?.cancel();levelTask=nil;voiceLevel=0
         recording=false;micPaused=false;listeningElapsed=0
         listeningStart=nil;pausedTotal=0;pauseBegan=nil
@@ -395,7 +414,7 @@ import ScreenCaptureKit
 
     /// Called after a reply finishes, so the conversation takes its next turn.
     private func resumeConversationTurn() {
-        guard conversationActive, !recording, !busy else { return }
+        guard conversationActive, !recording, !busy, !speaking else { return }
         startListening()
     }
 
@@ -451,19 +470,18 @@ import ScreenCaptureKit
         }
     }
     private func speak(_ text:String,id:UUID) {
+        speaking=true
         speakTask=Task {
+            // Covers every exit: synthesis failure, cancellation, and mute mid-flight.
+            // Without it a failed reply would strand the conversation forever.
+            defer { if epoch==id { speaking=false;resumeConversationTurn() } }
             do {
                 status="Preparing local voice"
                 let result=try await speech.request(["op":"synthesize","text":text])
                 try Task.checkCancellation();guard epoch==id,!muted,let encoded=result["audio"] as? String,let data=Data(base64Encoded:encoded) else { return }
                 try voice.play(data);status="Speaking · press the shortcut to interrupt"
                 while voice.isPlaying { try await Task.sleep(for:.milliseconds(100)) }
-                if epoch==id {
-                    status="Ready · all AI runs on this Mac"
-                    // Reopening only after playback ends is also what stops Jarvis
-                    // transcribing its own voice.
-                    resumeConversationTurn()
-                }
+                if epoch==id { status="Ready · all AI runs on this Mac" }
             } catch { if epoch==id,!(error is CancellationError) { self.error="Speech: "+error.localizedDescription;status="Ready" } }
         }
     }
