@@ -24,10 +24,11 @@ cp .build/release/Jarvis "$APP/Contents/MacOS/Jarvis"
 cp .build/release/JarvisBroker "$APP/Contents/XPCServices/JarvisBroker.xpc/Contents/MacOS/JarvisBroker"
 mkdir -p "$APP/Contents/Resources/Fonts"
 cp Resources/Fonts/*.otf "$APP/Contents/Resources/Fonts/"
+cp Resources/Jarvis.icns "$APP/Contents/Resources/Jarvis.icns"
 PROJECT_DIR="$PROJECT_DIR" /usr/bin/python3 - <<'PY'
 import os,plistlib,pathlib
 root=pathlib.Path(os.environ['PROJECT_DIR']);app=root/'Jarvis.app/Contents'
-plist={'CFBundleIdentifier':'local.jarvis.mac','CFBundleName':'Jarvis','CFBundleDisplayName':'Jarvis','CFBundleExecutable':'Jarvis','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.1.0','CFBundleVersion':'1','LSMinimumSystemVersion':'26.0','NSHighResolutionCapable':True,'NSMicrophoneUsageDescription':'Record speech only while you have started a recording. Audio stays on your Mac.','NSScreenCaptureUsageDescription':'Attach the screen to a local question when you request it.','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.','JarvisProjectRoot':str(root)}
+plist={'CFBundleIdentifier':'local.jarvis.mac','CFBundleName':'Jarvis','CFBundleDisplayName':'Jarvis','CFBundleExecutable':'Jarvis','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.1.0','CFBundleVersion':'1','LSMinimumSystemVersion':'26.0','CFBundleIconFile':'Jarvis','NSHighResolutionCapable':True,'NSMicrophoneUsageDescription':'Record speech only while you have started a recording. Audio stays on your Mac.','NSScreenCaptureUsageDescription':'Attach the screen to a local question when you request it.','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.','JarvisProjectRoot':str(root)}
 (app/'Info.plist').write_bytes(plistlib.dumps(plist))
 helper={'CFBundleIdentifier':'local.jarvis.mac.broker','CFBundleName':'JarvisBroker','CFBundleExecutable':'JarvisBroker','CFBundlePackageType':'XPC!','CFBundleVersion':'1','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.','XPCService':{'ServiceType':'Application','RunLoopType':'NSRunLoop'}}
 (app/'XPCServices/JarvisBroker.xpc/Contents/Info.plist').write_bytes(plistlib.dumps(helper))
