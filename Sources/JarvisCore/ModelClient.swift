@@ -3,6 +3,7 @@ import Foundation
 public struct ModelResponse: Sendable {
     public var content: String
     public var tools: [ToolCall]
+    public var statistics: GenerationStatistics?
 }
 public actor ModelClient {
     private let session: URLSession
@@ -26,23 +27,29 @@ public actor ModelClient {
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["model":model,"keep_alive":0])
         _ = try? await session.data(for:req); loaded = nil
     }
-    public func respond(model: String, messages: [[String:Any]], tools: [[String:Any]], keepWarm: Bool, onToken: @escaping @Sendable (String) async -> Void) async throws -> ModelResponse {
+    public func respond(model: String, messages: [[String:Any]], tools: [[String:Any]], keepWarm: Bool, options: GenerationOptions = GenerationOptions(), onToken: @escaping @Sendable (String) async -> Void) async throws -> ModelResponse {
         guard [Configuration.everyday,Configuration.deep].contains(model) else { throw JarvisError.message("Only configured local models are allowed.") }
+        let options = try options.validated()
         if let loaded, loaded != model { await unload() }
         loaded = model
         var req = URLRequest(url: Configuration.endpoint.appendingPathComponent("api/chat"))
         req.httpMethod = "POST"; req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String:Any] = ["model":model,"messages":messages,"stream":true,"think":model == Configuration.deep,"keep_alive":keepWarm ? -1 : 300,
-            "options":["num_ctx":8192,"num_predict":1024,"temperature":0.2]]
+            "options":["num_ctx":8192,"num_predict":options.maximumTokens,"temperature":options.temperature]]
         if !tools.isEmpty { body["tools"] = tools }
         req.httpBody = try JSONSerialization.data(withJSONObject:body)
         let (bytes,response) = try await session.bytes(for:req)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw JarvisError.message("Local model request failed. Check that the selected model is installed.") }
         var content = ""; var calls: [ToolCall] = []
+        var statistics: GenerationStatistics?
+        var completed = false
         for try await line in bytes.lines {
             try Task.checkCancellation()
             guard let data = line.data(using:.utf8), let j = try JSONSerialization.jsonObject(with:data) as? [String:Any] else { continue }
             if j["error"] != nil { throw JarvisError.message("The local model reported an inference error.") }
+            if j["done"] as? Bool == true {
+                completed = true; statistics = GenerationStatistics(model:model,response:j)
+            }
             if let m = j["message"] as? [String:Any] {
                 if let token = m["content"] as? String { content += token; await onToken(token) }
                 for raw in m["tool_calls"] as? [[String:Any]] ?? [] {
@@ -52,6 +59,7 @@ public actor ModelClient {
                 }
             }
         }
-        return ModelResponse(content:content,tools:calls)
+        guard completed else { throw JarvisError.message("The local model stream ended before completion. No pending tool calls were executed.") }
+        return ModelResponse(content:content,tools:calls,statistics:statistics)
     }
 }

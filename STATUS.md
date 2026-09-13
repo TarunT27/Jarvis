@@ -174,11 +174,41 @@ python3 scripts/speech_accuracy.py
 The recorder prompts you with each line; recordings land in `tests/speech/recordings/`
 and the harness picks them up automatically. Nothing leaves the Mac.
 
+## Build requirements
+
+The app targets **macOS 26**. `Package.swift` declares `swift-tools-version: 6.2` because
+`.macOS(.v26)` was introduced in PackageDescription 6.2 — under 6.0 the manifest does not
+compile at all (`error: 'v26' is unavailable`). Xcode 26 / Swift 6.2 or later is required.
+
+Signing uses a local self-signed identity, `Jarvis Local Signing`, held in the login
+keychain. This makes the designated requirement certificate-based rather than a cdhash:
+
+```
+designated => identifier "local.jarvis.mac" and certificate leaf = H"a9a68de6…"
+```
+
+That requirement survives a rebuild, so the microphone grant and the Keychain ACL on the
+vault root key are no longer re-requested on every build — which they were under ad-hoc
+signing, where the requirement was the binary's own hash.
+
+The certificate is self-signed and therefore untrusted, so `security find-identity -v` does
+not list it and `pick_identity` in `scripts/build.sh` falls back to ad-hoc. Pass it
+explicitly:
+
+```bash
+JARVIS_SIGNING_IDENTITY="Jarvis Local Signing" ./scripts/build.sh
+```
+
+Or trust it once — Keychain Access › login › Certificates, double-click *Jarvis Local
+Signing*, Trust › Code Signing › Always Trust — after which the plain script finds it.
+Losing the certificate is not fatal: generating a new one changes the requirement, which
+costs one more round of permission prompts and nothing else.
+
 ## Reproducing the measurements
 
 ```bash
-swift test                              # 10 security and policy tests
-./scripts/build.sh                      # build + ad-hoc sign Jarvis.app
+swift test                              # security and policy tests
+./scripts/build.sh                      # build + sign Jarvis.app (see Build requirements)
 python3 scripts/tool_benchmark.py       # tool-call reliability -> reports/
 python3 scripts/memory_probe.py         # everyday memory footprint
 python3 scripts/speech_accuracy.py      # recognition accuracy
@@ -195,8 +225,12 @@ log show --last 10m --predicate 'subsystem == "local.jarvis.mac"' --info
 
 ## Known limits
 
-- Ad-hoc signed and local-only. Distribution needs Developer ID, notarization, and
-  probably Google OAuth verification.
+- Locally signed and local-only. The identity is self-signed, so Gatekeeper still treats
+  the app as unidentified. Distribution needs Developer ID, notarization, and probably
+  Google OAuth verification.
+- Raising the target to macOS 26 has not been re-measured. Every number above was taken on
+  the macOS 15 build; the tool, memory and speech harnesses should be re-run before these
+  figures are quoted against the current binary.
 - Sustained 30-minute thermal and swap validation has not been run.
 - Google, Gmail, Calendar and Brave paths are implemented but unexercised end to end —
   they need your OAuth client JSON and a Brave key.

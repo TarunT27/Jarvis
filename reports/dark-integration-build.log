@@ -1,0 +1,11 @@
+[0/1] Planning build
+Building for debugging...
+[0/6] Write sources
+[1/6] Write swift-version--58304C5D6DBC2206.txt
+[3/6] Compiling JarvisApp ChatView.swift
+[4/6] Emitting module JarvisApp
+[5/7] Compiling JarvisApp JarvisApp.swift
+[5/8] Write Objects.LinkFileList
+[6/8] Linking Jarvis
+[7/8] Applying Jarvis
+Build complete! (2.87s)

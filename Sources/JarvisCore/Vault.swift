@@ -99,7 +99,7 @@ public final class Vault: CredentialStore {
     }
     /// Persist any deferred writes. Call at the end of each request.
     public func flush() throws { if dirty { try save() } }
-    public func rows(kind: String? = nil, query: String? = nil, limit: Int = 200) throws -> [[String: String]] {
+    public func rows(kind: String? = nil, query: String? = nil, limit: Int = 200, id: String? = nil) throws -> [[String: String]] {
         var sql = "SELECT r.id,r.kind,r.body,r.source,r.created FROM records r"
         var args: [String] = []; var clauses: [String] = []
         if let query, !query.isEmpty {
@@ -108,6 +108,7 @@ public final class Vault: CredentialStore {
             sql += " JOIN search s ON s.id=r.id"; clauses.append("search MATCH ?"); args.append(terms)
         }
         if let kind { clauses.append("r.kind=?"); args.append(kind) }
+        if let id { clauses.append("r.id=?"); args.append(id) }
         if !clauses.isEmpty { sql += " WHERE " + clauses.joined(separator: " AND ") }
         sql += " ORDER BY r.created DESC LIMIT \(max(1, min(limit, 100_000)))"
         var stmt: OpaquePointer?
@@ -115,13 +116,16 @@ public final class Vault: CredentialStore {
         defer { sqlite3_finalize(stmt) }
         for (i,a) in args.enumerated() { sqlite3_bind_text(stmt, Int32(i+1), a, -1, transient) }
         var result: [[String: String]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var step = sqlite3_step(stmt)
+        while step == SQLITE_ROW {
             var row: [String: String] = [:]
             for (i,k) in ["id","kind","body","source","created"].enumerated() {
                 if let c = sqlite3_column_text(stmt, Int32(i)) { row[k] = String(cString: c) }
             }
             result.append(row)
+            step = sqlite3_step(stmt)
         }
+        guard step == SQLITE_DONE else { throw JarvisError.message("Database read failed.") }
         return result
     }
     /// Credentials the broker owns. Stored in the encrypted database rather than the

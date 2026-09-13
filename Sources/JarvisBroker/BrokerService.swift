@@ -14,6 +14,7 @@ import JarvisCore
     private var roots:[URL]=[]
     private var apps:Set<String>=["com.apple.finder","com.apple.Safari","com.apple.TextEdit","com.apple.Notes","com.apple.reminders","com.apple.iCal"]
     private var active:Set<UUID>=[]
+    private var taskConversations:[UUID:UUID]=[:]
     private let privacy=PrivacyLedger()
     private let store=EKEventStore()
 
@@ -63,17 +64,30 @@ import JarvisCore
         case "status": return BrokerReply(result:try json(["google":google.connected,"brave":((try? vault.credential("brave-key")) ?? nil) != nil,"folders":roots.map(\.path),"apps":apps.sorted()]))
         case "begin":
             guard let id=r.taskID,let conversation=r.conversationID else { throw JarvisError.message("Missing task.") }
-            policy.begin(id);active.insert(id)
+            // Legacy chats lack provenance, so resumed legacy content fails closed.
+            let history=try vault.rows(kind:"chat").compactMap { row -> ChatMessage? in
+                guard let body=row["body"] else { return nil }
+                return try? JSONDecoder().decode(ChatMessage.self,from:Data(body.utf8))
+            }.filter { $0.conversationID==conversation }
+            let storedMemories = try vault.rows(kind:"memory",limit:1)
+            let hasMemories = r.value != "no_memory" && !storedMemories.isEmpty
+            let wasPrivate = try ConversationPrivacy.isPrivate(conversation,in:vault)
+            let isPrivate = r.value=="private" || hasMemories || history.contains { $0.privateContext != false } || wasPrivate
+            if isPrivate { try ConversationPrivacy.mark(conversation,in:vault) }
+            policy.begin(id);active.insert(id);taskConversations[id]=conversation
             // Attached screen contents are private too, and the broker never sees the image.
-            privacy.begin(task:id,conversation:conversation,carriesPrivateContent:r.value=="private")
+            privacy.begin(task:id,conversation:conversation,carriesPrivateContent:isPrivate)
             return BrokerReply(result:try json(["web_allowed":privacy.webAllowed(conversation:conversation)]))
         // Ending a task must NOT clear the taint: the conversation continues.
-        case "end": if let id=r.taskID { policy.end(id);active.remove(id);privacy.endTask(id) };return BrokerReply(result:"Ended")
-        case "cancel": policy.cancelAll();active.removeAll();privacy.forgetTasks();return BrokerReply(result:"Stopped")
+        case "end": if let id=r.taskID { policy.end(id);active.remove(id);privacy.endTask(id);taskConversations.removeValue(forKey:id) };return BrokerReply(result:"Ended")
+        case "cancel": policy.cancelAll();active.removeAll();privacy.forgetTasks();taskConversations.removeAll();return BrokerReply(result:"Stopped")
         case "propose":
             guard let call=r.call,let id=r.taskID,active.contains(id) else { throw JarvisError.message("Task is no longer active.") }
-            if call.name=="web_search",!privacy.webAllowed(task:id) {
-                throw JarvisError.message("Web search is off for this conversation because private content was read in it. Start a new conversation and give the exact public search terms.")
+            if call.name=="web_search" {
+                guard let conversation=taskConversations[id],privacy.webAllowed(task:id),
+                      try !ConversationPrivacy.isPrivate(conversation,in:vault) else {
+                    throw JarvisError.message("This conversation contains private context. Turn off Include saved memories in response settings and start a new conversation for public web search.")
+                }
             }
             if let proposal=try policy.propose(call,taskID:id) { return BrokerReply(proposal:proposal) }
             return try await run(call,task:id)
@@ -81,7 +95,20 @@ import JarvisCore
             guard let proposal=r.proposal else { throw JarvisError.message("Missing approval.") }
             let call=try policy.consume(proposal)
             return try await run(call,task:proposal.taskID,actionID:proposal.id)
-        case "records": return BrokerReply(result:try json(vault.rows(kind:r.value)))
+        case "workspace_list":
+            return BrokerReply(result:String(decoding:try JSONEncoder().encode(WorkspaceStore.list(vault)),as:UTF8.self))
+        case "workspace_save":
+            guard let value=r.value else { throw JarvisError.message("Missing workspace item.") }
+            try WorkspaceStore.save(JSONDecoder().decode(WorkspaceItem.self,from:Data(value.utf8)),in:vault)
+            return BrokerReply(result:"Saved locally")
+        case "workspace_delete":
+            guard let value=r.value,let id=UUID(uuidString:value) else { throw JarvisError.message("Invalid workspace identifier.") }
+            try WorkspaceStore.delete(id,from:vault);return BrokerReply(result:"Deleted")
+        case "records":
+            guard let kind=r.value,["chat","memory","draft","audit","organization"].contains(kind) else { throw JarvisError.message("Collection is not available to the app.") }
+            let rows=try vault.rows(kind:kind)
+            if kind=="memory",!rows.isEmpty,let task=r.taskID { try markPrivate(task:task) }
+            return BrokerReply(result:try json(rows))
         case "organization_save":
             guard let value=r.value,!value.isEmpty else { throw JarvisError.message("Organization data is empty.") }
             try vault.put(kind:"organization",body:value,id:"organization")
@@ -119,26 +146,31 @@ import JarvisCore
         default:throw JarvisError.message("Unsupported broker operation.")
         }
     }
+    private func markPrivate(task:UUID) throws {
+        guard let conversation=taskConversations[task],let vault else { throw JarvisError.message("Task is no longer active.") }
+        try ConversationPrivacy.mark(conversation,in:vault)
+        privacy.markPrivate(task:task)
+    }
     private func run(_ call:ToolCall,task:UUID,actionID:UUID=UUID()) async throws -> BrokerReply {
         guard active.contains(task) else { throw JarvisError.message("Task was stopped.") }
         let a=call.arguments;let (vault,google)=try ready()
         var result=""
         switch call.name {
         case "search_documents":
-            privacy.markPrivate(task:task)
+            try markPrivate(task:task)
             try DocumentIndex.refresh(vault,roots:roots)
             result=try json(DocumentIndex.search(vault,query:a["query"]!))
-        case "read_document": privacy.markPrivate(task:task);result=String(try DocumentIndex.contents(of:a["path"]!,roots:roots).prefix(18000))
+        case "read_document": try markPrivate(task:task);result=String(try DocumentIndex.contents(of:a["path"]!,roots:roots).prefix(18000))
         case "open_app":
             guard apps.contains(a["bundle_id"]!),let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:a["bundle_id"]!) else { throw JarvisError.message("Approve this app in Settings first.") }
             _=try await NSWorkspace.shared.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration());result="Application opened."
         case "save_memory":try vault.put(kind:"memory",body:a["text"]!);result="Memory saved."
         case "save_draft":try vault.put(kind:"draft",body:json(a));result="Draft saved locally. Nothing was sent."
         case "gmail_search":
-            privacy.markPrivate(task:task)
+            try markPrivate(task:task)
             result=try json(await google.request(path:"/gmail/v1/users/me/messages",query:["q":a["query"]!,"maxResults":"10"]))
         case "gmail_read":
-            privacy.markPrivate(task:task);let id=try safeID(a["id"]!)
+            try markPrivate(task:task);let id=try safeID(a["id"]!)
             let message=try await google.request(path:"/gmail/v1/users/me/messages/"+id,query:["format":"full"])
             result=try json(["id":id,"snippet":message["snippet"] ?? "","payload":extractMail(message["payload"] as? [String:Any] ?? [:])])
         case "send_email":
@@ -160,7 +192,7 @@ import JarvisCore
                 if resolved { result="Email confirmed in Sent mail." } else { throw JarvisError.message("Send outcome is uncertain. Check Gmail Sent before sending again. Jarvis will not retry this email.") }
             }
         case "calendar_list":
-            privacy.markPrivate(task:task);result=try json(await google.request(path:"/calendar/v3/calendars/primary/events",query:["timeMin":a["start"]!,"timeMax":a["end"]!,"singleEvents":"true","orderBy":"startTime","maxResults":"30"]))
+            try markPrivate(task:task);result=try json(await google.request(path:"/calendar/v3/calendars/primary/events",query:["timeMin":a["start"]!,"timeMax":a["end"]!,"singleEvents":"true","orderBy":"startTime","maxResults":"30"]))
         case "calendar_create","calendar_update":
             var event:[String:Any]=["summary":a["title"]!,"start":["dateTime":a["start"]!,"timeZone":a["timezone"]!],"end":["dateTime":a["end"]!,"timeZone":a["timezone"]!],"attendees":a["attendees"]!.split(separator:",").map { ["email":$0.trimmingCharacters(in:.whitespaces)] }]
             let creating=call.name=="calendar_create"

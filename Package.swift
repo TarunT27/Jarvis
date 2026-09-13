@@ -1,6 +1,6 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
-let package = Package(name: "Jarvis", platforms: [.macOS(.v15)], products: [
+let package = Package(name: "Jarvis", platforms: [.macOS(.v26)], products: [
     .executable(name: "Jarvis", targets: ["JarvisApp"]),
     .executable(name: "JarvisBroker", targets: ["JarvisBroker"])
 ], targets: [

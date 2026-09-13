@@ -8,13 +8,13 @@ struct RecentChatRow: View {
     var body: some View {
         HStack(alignment:.top,spacing:9) {
             Image(systemName:conversation.projectID == nil ? "bubble.left" : "folder")
-                .font(.system(size:13,weight:.medium)).foregroundStyle(.teal).frame(width:16)
+                .font(.system(size:13,weight:.medium)).foregroundStyle(JarvisTheme.accent).frame(width:16)
             VStack(alignment:.leading,spacing:3) {
                 Text(conversation.title).lineLimit(1)
                 if !compact {
                     Text(conversation.preview.isEmpty ? "No messages yet" : conversation.preview)
-                        .font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(.secondary).lineLimit(2)
-                    Text(conversation.updated,style:.relative).font(JarvisTypography.font(.regular,style:.caption2)).foregroundStyle(.secondary)
+                        .font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary).lineLimit(2)
+                    Text(conversation.updated,style:.relative).font(JarvisTypography.font(.regular,style:.caption2)).foregroundStyle(JarvisTheme.secondary)
                 }
             }
             Spacer(minLength:0)
@@ -48,38 +48,38 @@ struct ChatDirectoryView: View {
                 VStack(alignment:.leading,spacing:6) {
                     Text("Chats & projects").font(JarvisTypography.font(.semibold,style:.largeTitle))
                     Text(assistant.directoryProjectID.flatMap { id in assistant.projects.first(where:{$0.id==id})?.name }.map { "Organized in \($0)" } ?? "Your conversations, organized locally.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(JarvisTheme.secondary)
                 }
                 Spacer()
                 Button("New project",systemImage:"folder.badge.plus",action:onNewProject).buttonStyle(.bordered)
             }
             .padding(.horizontal,28).padding(.top,28).padding(.bottom,16)
             HStack(spacing:10) {
-                Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName:"magnifyingglass").foregroundStyle(JarvisTheme.secondary)
                 TextField("Search chats and projects",text:$query).textFieldStyle(.plain)
-                if !query.isEmpty { Button { query="" } label:{ Image(systemName:"xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain) }
+                if !query.isEmpty { Button { query="" } label:{ Image(systemName:"xmark.circle.fill").foregroundStyle(JarvisTheme.secondary) }.buttonStyle(.plain) }
             }
             .padding(10).background(.quaternary.opacity(0.5),in:RoundedRectangle(cornerRadius:10))
             .padding(.horizontal,28).padding(.bottom,12)
             if assistant.directoryProjectID != nil {
                 HStack {
-                    Label("Project filter",systemImage:"line.3.horizontal.decrease.circle").font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(.secondary)
+                    Label("Project filter",systemImage:"line.3.horizontal.decrease.circle").font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary)
                     Spacer()
                     Button("Show all chats") { assistant.directoryProjectID=nil }.buttonStyle(.borderless).font(JarvisTypography.font(.medium,style:.caption))
                 }.padding(.horizontal,28).padding(.bottom,8)
             }
             List {
                 Section("Projects") {
-                    if matchingProjects.isEmpty { Text("No projects match your search.").foregroundStyle(.secondary) }
+                    if matchingProjects.isEmpty { Text("No projects match your search.").foregroundStyle(JarvisTheme.secondary) }
                     ForEach(matchingProjects) { project in
                         Button {
                             assistant.selectedProjectID=project.id
                         } label: {
                             HStack(spacing:10) {
-                                Image(systemName:"folder.fill").foregroundStyle(.teal)
+                                Image(systemName:"folder.fill").foregroundStyle(JarvisTheme.accent)
                                 Text(project.name)
                                 Spacer()
-                                Text("\(assistant.conversations.filter{$0.projectID==project.id}.count)").font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(.secondary)
+                                Text("\(assistant.conversations.filter{$0.projectID==project.id}.count)").font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary)
                             }
                         }.buttonStyle(.plain)
                         .contextMenu {
@@ -160,7 +160,7 @@ struct NewProjectView: View {
     var body:some View {
         VStack(alignment:.leading,spacing:16) {
             Text("Create a project").font(JarvisTypography.font(.semibold,style:.title2))
-            Text("Group related conversations together on your Mac.").foregroundStyle(.secondary)
+            Text("Group related conversations together on your Mac.").foregroundStyle(JarvisTheme.secondary)
             TextField("Project name",text:$name).textFieldStyle(.roundedBorder).onSubmit(create)
             HStack { Spacer();Button("Cancel",role:.cancel){ dismiss() };Button("Create",action:create).buttonStyle(.borderedProminent).disabled(name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty) }
         }.padding(24).frame(width:420)

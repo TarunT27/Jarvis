@@ -11,6 +11,8 @@ public struct ChatMessage: Codable, Identifiable, Sendable {
     public var created: Date = Date()
     /// Optional keeps records written by older Jarvis builds decodable.
     public var conversationID: UUID?
+    public var statistics: GenerationStatistics?
+    public var privateContext: Bool?
     public init(role: String, content: String, conversationID: UUID? = nil) {
         self.role = role; self.content = content; self.conversationID = conversationID
     }
