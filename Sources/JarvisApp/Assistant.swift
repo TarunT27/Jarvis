@@ -66,6 +66,8 @@ import ScreenCaptureKit
     private let shortcut=PushToTalkShortcut()
     private var work:Task<Void,Never>?
     private var speakTask:Task<Void,Never>?
+    /// Identifies the newest spoken reply, so a superseded one cannot hand the turn back.
+    private var speechToken=UUID()
     private var recordingTask:Task<Void,Never>?
     private var levelTask:Task<Void,Never>?
     private var activeID:UUID?
@@ -82,8 +84,13 @@ import ScreenCaptureKit
     private let listeningLimit=SampleBuffer.retentionSeconds
     // Turn-taking. Whisper transcribes a finished utterance rather than a stream, so a
     // conversation is chunked by listening for the gap at the end of a sentence.
-    /// Root-mean-square above this counts as speech.
-    private let speechLevel:Float=0.015
+    /// The quietest level that can ever count as speech, whatever the room is doing.
+    /// The old fixed 0.015 assumed a microphone and a speaking distance: below it, a
+    /// normal voice never opened a turn and the conversation listened forever.
+    private static let minimumSpeechLevel:Float=0.004
+    /// Running estimate of the room's noise floor. Speech has to beat this, not an
+    /// absolute number, so a quiet room and a noisy one both work.
+    private var noiseFloor:Float=0.002
     /// Quiet for this long, after speech was heard, ends the turn.
     private let endOfTurnSilence:TimeInterval=1.1
     /// Consecutive frames of speech before a turn is considered started, so a door
@@ -319,7 +326,7 @@ import ScreenCaptureKit
         levelTask?.cancel();levelTask=nil;voiceLevel=0
         speech.cancel();voice.cancel();recording=false;busy=false;speaking=false;awaitingTranscriptReview=false
         micPaused=false;listeningElapsed=0;listeningStart=nil;pausedTotal=0;pauseBegan=nil
-        speechFrames=0;heardSpeech=false;silenceBegan=nil
+        speechFrames=0;heardSpeech=false;silenceBegan=nil;noiseFloor=0.002
         decide(false);proposal=nil;activeID=nil
         if let oldID { Task { _=try? await broker.request(BrokerRequest("end",taskID:oldID)) } }
     }
@@ -368,7 +375,7 @@ import ScreenCaptureKit
                 guard !Task.isCancelled else { voice.discard();return }
                 recording=true;micPaused=false
                 listeningStart=Date();pausedTotal=0;pauseBegan=nil;listeningElapsed=0
-                speechFrames=0;heardSpeech=false;silenceBegan=nil
+                speechFrames=0;heardSpeech=false;silenceBegan=nil;noiseFloor=0.002
                 status=conversationActive ? Self.conversationStatus : Self.listeningStatus
                 beginVoiceLevelMonitoring()
             } catch {
@@ -470,15 +477,28 @@ import ScreenCaptureKit
         }
     }
     private func speak(_ text:String,id:UUID) {
+        // run() can speak more than once in a turn. Without cancelling the previous
+        // one, two playbacks overlap and whichever finishes first clears `speaking`
+        // and reopens the microphone while Jarvis is still talking.
+        speakTask?.cancel()
+        let token=UUID();speechToken=token
         speaking=true
         speakTask=Task {
             // Covers every exit: synthesis failure, cancellation, and mute mid-flight.
-            // Without it a failed reply would strand the conversation forever.
-            defer { if epoch==id { speaking=false;resumeConversationTurn() } }
+            // Without it a failed reply would strand the conversation forever. Only the
+            // newest attempt may hand the turn back.
+            defer { if epoch==id,speechToken==token { speaking=false;resumeConversationTurn() } }
             do {
                 status="Preparing local voice"
                 let result=try await speech.request(["op":"synthesize","text":text])
-                try Task.checkCancellation();guard epoch==id,!muted,let encoded=result["audio"] as? String,let data=Data(base64Encoded:encoded) else { return }
+                    try Task.checkCancellation()
+                guard epoch==id,speechToken==token,!muted else { return }
+                // This used to fall into the same silent guard as a superseded turn, so
+                // a reply that synthesised nothing simply never spoke and said nothing
+                // about it.
+                guard let encoded=result["audio"] as? String,let data=Data(base64Encoded:encoded) else {
+                    status="The local voice returned no audio for that reply";return
+                }
                 try voice.play(data);status="Speaking · press the shortcut to interrupt"
                 while voice.isPlaying { try await Task.sleep(for:.milliseconds(100)) }
                 if epoch==id { status="Ready · all AI runs on this Mac" }
@@ -490,6 +510,10 @@ import ScreenCaptureKit
     /// to be heard first, so opening the microphone into a quiet room waits rather than
     /// firing an empty turn immediately.
     private func detectedEndOfTurn(_ level:Float) -> Bool {
+        // Drop to anything quieter at once; rise only slowly, so a long utterance does
+        // not drag the floor up behind it and swallow the end of its own sentence.
+        noiseFloor = level < noiseFloor ? level : min(noiseFloor * 1.0015, 0.05)
+        let speechLevel = max(noiseFloor * 3, Self.minimumSpeechLevel)
         if level >= speechLevel {
             speechFrames += 1
             if speechFrames >= speechFramesRequired { heardSpeech=true }
