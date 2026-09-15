@@ -1,8 +1,0 @@
-[0/1] Planning build
-Building for production...
-[0/3] Write swift-version--58304C5D6DBC2206.txt
-Build complete! (0.10s)
-Signing with stable identity: Jarvis Local Signing
-/Users/taruntt/Documents/Codex/2026-09-09/hey-there-i-have-a-macbook/outputs/jarvis/Jarvis.app/Contents/XPCServices/JarvisBroker.xpc: replacing existing signature
-/Users/taruntt/Documents/Codex/2026-09-09/hey-there-i-have-a-macbook/outputs/jarvis/Jarvis.app: replacing existing signature
-Built /Users/taruntt/Documents/Codex/2026-09-09/hey-there-i-have-a-macbook/outputs/jarvis/Jarvis.app

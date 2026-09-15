@@ -1,0 +1,39 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Local runtime and downloaded model assets
+.runtime/
+
+# Packaged applications and signing output
+Jarvis.app/
+*.app/
+*.dSYM/
+*.xcarchive/
+
+# Credentials, local configuration, and encrypted user data
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.mobileprovision
+*.enc
+vault.enc
+
+# Local test recordings and generated reports
+Tests/speech/recordings/
+reports/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# macOS and editors
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.vscode/
+.idea/
