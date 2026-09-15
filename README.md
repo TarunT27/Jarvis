@@ -29,11 +29,11 @@ Jarvis is a single-user macOS assistant that combines a native SwiftUI interface
 
 ### Chat workspace
 
-![Jarvis chat workspace](docs/screenshots/chat-desktop.png)
+![Jarvis chat workspace](docs/screenshots/chat-workspace-2026-09-15.png)
 
 ### Adaptive narrow layout
 
-![Jarvis narrow chat layout](docs/screenshots/chat-narrow.png)
+![Jarvis narrow chat layout](docs/screenshots/chat-narrow-2026-09-15.png)
 
 The screenshots are captures of the native macOS app. The conversations shown are local test content; no mock browser UI is used by the application.
 
