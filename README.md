@@ -8,6 +8,8 @@
 > [!IMPORTANT]
 > **Jarvis is a work in progress.** This repository documents an active prototype, not a finished or distributable product. Setup is still developer-oriented, some integrations require your own credentials, and several workflows need more real-world validation.
 
+![Ambient intelligence concept artwork for Jarvis](docs/visuals/jarvis-ambient-intelligence.png)
+
 ![Jarvis Overview](docs/screenshots/overview.png)
 
 ## What Jarvis does
@@ -24,6 +26,32 @@ Jarvis is a single-user macOS assistant that combines a native SwiftUI interface
 - Supports optional Brave Search with a user-provided API key.
 - Shows local activity, model availability, conversation counts, and approved access.
 - Keeps consequential actions behind a visible approval step.
+
+## Visual language
+
+The original concept artwork below sets the atmosphere for Jarvis: quiet presence, deliberate focus, and a protected local workspace. It is design artwork for the project, not a representation of product screens.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/visuals/jarvis-voice-presence.png" alt="Abstract champagne orb and layered sound waves representing voice presence">
+      <br><strong>Voice presence</strong><br>
+      A composed, human-feeling voice experience without turning the workspace into a spectacle.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/visuals/jarvis-private-by-design.png" alt="A protected champagne seed inside layers of dark glass representing privacy">
+      <br><strong>Private by design</strong><br>
+      Personal context stays contained in a local-first environment with deliberate boundaries.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      <img src="docs/visuals/jarvis-focus-workspace.png" alt="A warm, focused charcoal workspace with a champagne path of light">
+      <br><strong>Focused workspace</strong><br>
+      A calm companion for complex work, built to keep attention on the task rather than the interface.
+    </td>
+  </tr>
+</table>
 
 ## Screenshots
 
