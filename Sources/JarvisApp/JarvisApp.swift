@@ -274,7 +274,10 @@ struct MainView:View {
         .accessibilityLabel(assistant.unlocked ? "Jarvis is running locally" : "Jarvis is locked")
         .accessibilityHint("Opens Settings and Activity")
         .accessibilityIdentifier("sidebar.account-menu")
-        .popover(isPresented:$showingAccountMenu,attachmentAnchor:.point(.bottomLeading),arrowEdge:.bottom) {
+        // Anchored to the whole row and opening upward: the row sits at the bottom of
+        // the window, so the old bottom-leading point anchor centred the popover on the
+        // row's left corner, hung it half off the window and covered the row itself.
+        .popover(isPresented:$showingAccountMenu,attachmentAnchor:.rect(.bounds),arrowEdge:.top) {
             SidebarStatusMenu(assistant:assistant) { showingAccountMenu=false }
         }
     }
@@ -289,15 +292,55 @@ private struct SidebarStatusMenu: View {
                 Image(systemName:"lock.shield").font(.system(size:15)).foregroundStyle(JarvisTheme.healthy)
                 VStack(alignment:.leading,spacing:2) {
                     Text("Everything runs on this Mac").font(JarvisTypography.font(.semibold,style:.subheadline))
-                    Text("Audio, models and memory stay local.").font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary)
+                    Text(assistant.unlocked ? "Audio, models and memory stay local." : "Your data stays encrypted until you unlock.")
+                        .font(JarvisTypography.font(.regular,style:.caption)).foregroundStyle(JarvisTheme.secondary)
                 }
-            }.padding(.bottom,12)
-            Divider()
-            Button { assistant.selectedPage="Settings";dismiss() } label: { Label("Settings",systemImage:"slider.horizontal.3").frame(maxWidth:.infinity,alignment:.leading) }
-                .buttonStyle(.borderless).padding(.top,8).accessibilityIdentifier("account.settings")
-            Button { assistant.selectedPage="Activity";dismiss() } label: { Label("Activity",systemImage:"checkmark.shield").frame(maxWidth:.infinity,alignment:.leading) }
-                .buttonStyle(.borderless).padding(.top,8).accessibilityIdentifier("account.activity")
-        }.padding(14).frame(width:260)
+            }.padding(.horizontal,6).padding(.top,4).padding(.bottom,10)
+            Divider().padding(.bottom,6)
+            if !assistant.unlocked {
+                row("Unlock with Touch ID",symbol:"touchid",id:"account.unlock") { Task { await assistant.unlock() } }
+                    .disabled(assistant.unlocking)
+            }
+            row("Settings",symbol:"slider.horizontal.3",shortcut:"⌘,",id:"account.settings") { assistant.selectedPage="Settings" }
+            row("Activity",symbol:"checkmark.shield",id:"account.activity") { assistant.selectedPage="Activity" }
+            row("Setup",symbol:"checklist",id:"account.setup") { assistant.selectedPage="Setup" }
+        }.padding(10).frame(width:248)
+    }
+
+    private func row(_ title:String,symbol:String,shortcut:String?=nil,id:String,action:@escaping ()->Void) -> some View {
+        Button { action();dismiss() } label: {
+            HStack(spacing:9) {
+                Image(systemName:symbol).frame(width:18)
+                Text(title)
+                Spacer(minLength:8)
+                if let shortcut { Text(shortcut).foregroundStyle(JarvisTheme.tertiary) }
+            }
+            .font(JarvisTypography.font(.regular,style:.subheadline))
+            .padding(.horizontal,8).padding(.vertical,6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(StatusMenuRowStyle())
+        .accessibilityIdentifier(id)
+    }
+}
+
+/// Menu-like rows: a full-width highlight under the pointer and while pressed, the way
+/// items in a real menu respond, instead of bare borderless text.
+private struct StatusMenuRowStyle:ButtonStyle {
+    // Spelled out: JarvisCore's own `Configuration` shadows the protocol's associated type here.
+    func makeBody(configuration:ButtonStyleConfiguration) -> some View { Row(configuration:configuration) }
+    struct Row:View {
+        let configuration:ButtonStyleConfiguration
+        @State private var hovering=false
+        init(configuration:ButtonStyleConfiguration) { self.configuration=configuration }
+        @Environment(\.isEnabled) private var enabled
+        var body:some View {
+            configuration.label
+                .foregroundStyle(enabled ? JarvisTheme.text : JarvisTheme.disabled)
+                .background(RoundedRectangle(cornerRadius:6,style:.continuous)
+                    .fill(JarvisTheme.selection.opacity(configuration.isPressed ? 0.34 : (hovering && enabled ? 0.22 : 0))))
+                .onHover { hovering=$0 }
+        }
     }
 }
 
