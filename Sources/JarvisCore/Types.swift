@@ -60,13 +60,40 @@ public struct ActionProposal: Codable, Identifiable, Sendable {
     public var call: ToolCall
     public var expires: Date
     public var taskID: UUID
+    /// Computer mutations are bound to the short-lived session that produced
+    /// them.  Keeping this optional preserves decoding of proposals produced by
+    /// older Jarvis builds and leaves ordinary approvals unchanged.
+    public var computerSessionID: UUID?
+
+    public init(id: UUID = UUID(), call: ToolCall, expires: Date, taskID: UUID, computerSessionID: UUID? = nil) {
+        self.id = id
+        self.call = call
+        self.expires = expires
+        self.taskID = taskID
+        self.computerSessionID = computerSessionID
+    }
+}
+/// The result of a supervised computer observation or action.  `image` is a
+/// base64-encoded screenshot when the native worker has one; it is kept out of
+/// chat history and broker audit records.
+public struct ComputerObservation: Codable, Sendable, Equatable {
+    public var text: String
+    public var image: String?
+
+    public init(text: String, image: String? = nil) {
+        self.text = text
+        self.image = image
+    }
 }
 public struct BrokerReply: Codable, Sendable {
     public var result: String?
+    /// Optional screenshot associated with `result`; absent on older replies
+    /// and on all non-computer operations.
+    public var image: String?
     public var proposal: ActionProposal?
     public var error: String?
-    public init(result: String? = nil, proposal: ActionProposal? = nil, error: String? = nil) {
-        self.result = result; self.proposal = proposal; self.error = error
+    public init(result: String? = nil, image: String? = nil, proposal: ActionProposal? = nil, error: String? = nil) {
+        self.result = result; self.image = image; self.proposal = proposal; self.error = error
     }
 }
 public enum Configuration {
@@ -85,9 +112,8 @@ public enum Configuration {
     /// own loopback-only server; only the weights are shared. Override with JARVIS_MODELS.
     public static var modelStore: URL {
         if let p = ProcessInfo.processInfo.environment["JARVIS_MODELS"] { return URL(fileURLWithPath: p) }
-        let shared = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ollama/models")
-        if FileManager.default.fileExists(atPath: shared.appendingPathComponent("manifests").path) { return shared }
-        return project.appendingPathComponent(".runtime/ollama-models")
+        // Ollama creates this on first pull, so an installed app needs no project fallback.
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ollama/models")
     }
     public static var project: URL {
         if let p = ProcessInfo.processInfo.environment["JARVIS_PROJECT"] { return URL(fileURLWithPath: p) }

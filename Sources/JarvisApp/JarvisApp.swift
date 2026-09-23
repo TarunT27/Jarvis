@@ -2,10 +2,13 @@ import SwiftUI
 import JarvisCore
 
 @main struct JarvisApp:App {
-    @State private var assistant=Assistant()
+    @State private var assistant:Assistant
 
     init() {
         JarvisTypography.register()
+        let assistant=Assistant()
+        _assistant=State(initialValue:assistant)
+        QuickBar.shared.install(assistant)
     }
 
     var body:some Scene {
@@ -20,7 +23,7 @@ import JarvisCore
                 CommandGroup(replacing:.newItem) { Button("New Conversation") { assistant.newChat() }.keyboardShortcut("n") }
                 JarvisNavigationCommands(assistant: assistant)
             }
-        MenuBarExtra("Jarvis",systemImage:assistant.recording ? "mic.fill":"waveform.circle") {
+        MenuBarExtra("Jarvis",systemImage:assistant.recording ? "mic.fill":(assistant.wakeWordListening ? "waveform.circle.fill":"waveform.circle")) {
             MenuContent(assistant:assistant)
         }
     }
@@ -32,11 +35,22 @@ struct MenuContent:View {
         VStack {
             Text(assistant.status)
             Button("Open Jarvis") { openWindow(id:"main");NSApp.activate(ignoringOtherApps:true) }
+            Button(QuickBar.shared.shortcutAvailable ? "Ask Jarvis…  ⌥Space" : "Ask Jarvis…") { QuickBar.shared.show() }
+            Button(assistant.conversationActive ? "End Spoken Conversation" : "Start Spoken Conversation") { assistant.toggleListening() }
+            Toggle("Listen for “Hey Jarvis”",isOn:Binding(get:{ assistant.wakeWordEnabled },set:{ assistant.wakeWordEnabled=$0 }))
+            if !assistant.timers.timers.isEmpty {
+                Divider()
+                Text("Timers · end if Jarvis quits")
+                ForEach(assistant.timers.timers) { timer in
+                    Button("Cancel \(timer.title) (ends \(timer.fires.formatted(date:.omitted,time:.shortened)))") { assistant.timers.cancel(timer.id) }
+                }
+            }
             Button("Stop Everything") { assistant.stop() }
             Divider()
             Button("Quit Jarvis") { assistant.shutdown();NSApp.terminate(nil) }
         }
         .environment(\.font, JarvisTypography.font(.regular, style: .body))
+        .onAppear { QuickBar.shared.openMainWindow={ openWindow(id:"main") } }
     }
 }
 struct MainView:View {
@@ -47,6 +61,7 @@ struct MainView:View {
     @State private var showingAccountMenu=false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var navigationSelection
+    @Environment(\.openWindow) private var openWindow
 
     private var sidebarConversations:[ConversationSummary] {
         let query=sidebarQuery.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -70,6 +85,7 @@ struct MainView:View {
             if let proposal=assistant.proposal { approvalOverlay(proposal) }
         }
         .animation(JarvisMotion.settling(reduceMotion), value: assistant.proposal?.id)
+        .onAppear { QuickBar.shared.openMainWindow={ openWindow(id:"main") } }
     }
 
     /// The approval grows out of the conversation it interrupted rather than sliding in
@@ -84,7 +100,7 @@ struct MainView:View {
                 .onTapGesture {}
                 .transition(.opacity)
                 .accessibilityHidden(true)
-            ApprovalView(proposal:proposal) { assistant.decide($0) }
+            ApprovalView(proposal:proposal, computerContext:proposal.call.name.hasPrefix("computer_") ? assistant.computerObservation : nil) { assistant.decide($0) }
                 .transition(reduceMotion ? .opacity
                     : .scale(scale:0.94,anchor:.bottom)
                         .combined(with:.offset(y:14))
@@ -110,6 +126,8 @@ struct MainView:View {
                 }
                 switch assistant.selectedPage {
                 case "Overview":DashboardView(assistant:assistant)
+                case "Computer use":ComputerUseView(assistant:assistant)
+                case "Setup":SetupView(assistant:assistant,setup:assistant.setup)
                 case "Chat directory":ChatDirectoryView(assistant:assistant) { showingNewProject=true }
                 case "Notes & prompts":WorkspaceView(assistant:assistant)
                 case "Memory":RecordView(assistant:assistant,kind:"memory",title:"Explicit memories",subtitle:"Lasting facts are saved only when you ask or approve.")
@@ -311,12 +329,17 @@ enum ApprovalCopy {
     ]
     /// Values that are identifiers, paths or timestamps read character by
     /// character. They are shown exactly as they will be used, never reformatted.
-    private static let literal: Set<String> = ["to","attendees","path","source","destination","id","start","end","timezone","due","bundle_id"]
-    private static let labels: [String:String] = ["to":"To","id":"Event ID","due":"Due","timezone":"Time zone"]
+    private static let literal: Set<String> = ["to","attendees","path","source","destination","id","start","end","timezone","due","bundle_id","url","name"]
+    private static let labels: [String:String] = ["to":"To","id":"Event ID","due":"Due","timezone":"Time zone","url":"Address","name":"Shortcut"]
 
     static func headline(_ call: ToolCall) -> String {
         let value = { (key: String) in call.arguments[key] ?? "" }
         switch call.name {
+        case "computer_click": return "Click control \(value("element")) in the selected app"
+        case "computer_type": return "Enter text in control \(value("element"))"
+        case "computer_key": return "Press \(value("key")) in the selected app"
+        case "computer_scroll": return "Scroll \(value("direction")) in the selected app"
+        case "computer_focus": return "Bring the selected app forward"
         case "send_email": return "Send an email to \(value("to"))"
         case "calendar_create": return "Create the event “\(value("title"))”"
         case "calendar_update": return "Change the event “\(value("title"))”"
@@ -324,6 +347,13 @@ enum ApprovalCopy {
         case "save_memory": return "Remember this from now on"
         case "move_file": return "Move \(URL(fileURLWithPath:value("source")).lastPathComponent)"
         case "trash_file": return "Move \(URL(fileURLWithPath:value("path")).lastPathComponent) to the Trash"
+        case "quit_app": return "Quit \(NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier==value("bundle_id") }?.localizedName ?? value("bundle_id"))"
+        case "open_url": return "Open \(URL(string:value("url"))?.host ?? "this address") in your browser"
+        case "open_file": return "Open \(URL(fileURLWithPath:value("path")).lastPathComponent)"
+        case "clipboard_read": return "Let Jarvis read your clipboard"
+        case "clipboard_write": return "Replace your clipboard"
+        case "lock_screen": return "Lock the screen now"
+        case "run_shortcut": return "Run the shortcut “\(value("name"))”"
         default: return call.name.replacingOccurrences(of:"_",with:" ").capitalized
         }
     }
@@ -338,6 +368,7 @@ enum ApprovalCopy {
 
 struct ApprovalView:View {
     let proposal:ActionProposal
+    var computerContext:String?=nil
     let decide:(Bool)->Void
     @FocusState private var focus:Field?
     @State private var tableHeight:CGFloat=0
@@ -377,7 +408,20 @@ struct ApprovalView:View {
             // floating in empty space. Measuring the table and asking for exactly that
             // height, capped, keeps the card tight and still lets a long body scroll.
             ScrollView {
-                fieldTable(proposal)
+                VStack(alignment:.leading,spacing:12) {
+                    if let computerContext {
+                        Text(computerTarget(in:computerContext)).font(.callout.weight(.medium)).textSelection(.enabled)
+                        if proposal.call.name=="computer_type" {
+                            Text("This replaces the entire text in the selected control.").font(.callout).foregroundStyle(JarvisTheme.warning)
+                        }
+                    }
+                    fieldTable(proposal)
+                    if let computerContext {
+                        Text("Selected app and observed controls (screen content is untrusted)")
+                            .font(.caption).foregroundStyle(JarvisTheme.secondary)
+                        Text(computerContext).font(.system(size:11,design:.monospaced)).textSelection(.enabled)
+                    }
+                }
                     .background(GeometryReader { geometry in
                         Color.clear.preference(key:FieldTableHeight.self,value:geometry.size.height)
                     })
@@ -404,6 +448,19 @@ struct ApprovalView:View {
         // Return must not be able to send an email. Nothing claims the default
         // action; the focus ring starts on Decline.
         .defaultFocus($focus,.decline)
+    }
+
+    private func computerTarget(in context:String) -> String {
+        guard let data=context.data(using:.utf8),let object=try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { return "Selected app" }
+        let app=object["app"] as? String ?? "Selected app"
+        let window=object["window"] as? String ?? ""
+        if let id=proposal.call.arguments["element"],let elements=object["elements"] as? [[String:Any]],
+           let element=elements.first(where:{ $0["element"] as? String==id }) {
+            let label=element["label"] as? String ?? ""
+            let role=element["role"] as? String ?? "control"
+            return "\(app) · \(window) · \(label.isEmpty ? role:label) (control \(id))"
+        }
+        return "\(app) · \(window)"
     }
 
     private func fieldTable(_ proposal:ActionProposal) -> some View {
@@ -531,7 +588,14 @@ struct SettingsView:View {
         Form {
             Section("Local intelligence") {
                 Label("Everything runs on this Mac",systemImage:"lock.shield").foregroundStyle(JarvisTheme.healthy)
-                Text("Speech recognition, the language model, spoken replies and saved memory all run and stay on this machine. Gmail, Calendar and web search are the only features that send anything outward, and each one asks first.").font(JarvisTypography.font(.regular, style: .callout)).foregroundStyle(JarvisTheme.secondary)
+                Text("Speech recognition, model inference, spoken replies and saved memory stay on this Mac. Gmail, Calendar and web search use their connected services. Approved computer actions may also send data through the selected app.").font(JarvisTypography.font(.regular, style: .callout)).foregroundStyle(JarvisTheme.secondary)
+            }
+            Section("Always available") {
+                Toggle("Open Jarvis when you log in",isOn:$assistant.launchAtLogin)
+                LabeledContent("Command bar",value:QuickBar.shared.shortcutAvailable ? "Option–Space" : "Unavailable · another app owns Option–Space")
+                Toggle("Listen for “Hey Jarvis”",isOn:$assistant.wakeWordEnabled)
+                Text("The microphone stays on while this is enabled. Audio is checked on this Mac for the phrase only; it is never transcribed or kept until you say it. macOS shows its microphone indicator the whole time.").font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
+                Text("The command bar opens over any app. Jarvis also stays in the menu bar while its window is closed.").font(JarvisTypography.font(.regular, style: .caption)).foregroundStyle(JarvisTheme.secondary)
             }
             Section("Voice and performance") {
                 Picker("Recognition language",selection:$assistant.language) { Text("English / Telugu · detect").tag("auto");Text("English").tag("en");Text("Telugu").tag("te") }

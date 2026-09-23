@@ -1,0 +1,28 @@
+Computer-use final validation
+Date: 2026-09-20 (America/New_York)
+Checkout: /Users/taruntt/Documents/Codex/2026-09-09/hey-there-i-have-a-macbook/outputs/jarvis
+
+Toolchain
+- DEVELOPER_DIR=/Library/Developer/CommandLineTools
+- SDK: /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+- Xcode present: 27.0 (build 27A266a); no license or toolchain settings changed.
+
+Build/discovery
+- Command: `DEVELOPER_DIR=/Library/Developer/CommandLineTools swift test --build-system native --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -Xswiftc -F -Xswiftc /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -Xswiftc -I -Xswiftc /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -Xlinker -L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -Xlinker -rpath -Xlinker /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -Xlinker -rpath -Xlinker /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib`
+- Exit 0; build completed. SwiftPM's CLT test runner reported 0 discovered tests, so the built XCTest bundle was run directly.
+
+Direct XCTest
+- Command: `DEVELOPER_DIR=/Library/Developer/CommandLineTools /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Xcode/Agents/xctest .build/arm64-apple-macosx/debug/JarvisPackageTests.xctest`
+- Exit 0; 57 tests executed, 0 failures, 0 unexpected failures.
+- Suites: ComputerPolicy 11, ConversationActivity 5, DocumentTool 11, MemoryRequest 4, PrivacyLedger 6, Security 11, Workspace 9.
+
+Local model probe
+- Existing loopback Ollama service was already listening at 127.0.0.1:11439; no app/server was launched.
+- Command: `DEVELOPER_DIR=/Library/Developer/CommandLineTools python3 scripts/computer_model_probe.py`
+- Exit 0; status `passed`; tool_selection, injection_refusal, and vision checks all passed.
+- Synthetic probe only; no screen capture, application control, or computer input was sent.
+
+Final rerun after selection/caret binding and unknown-permissions UI fixes (2026-09-20 15:51 ET)
+- The same CLT `swift test --build-system native` command exited 0 and rebuilt NativeComputerController, ComputerUseView, and the test bundle. SwiftPM discovery again reported 0 tests.
+- The same direct Xcode `xctest` command exited 0: 57 tests executed, 0 failures, 0 unexpected failures (0.037 seconds).
+- Final synthetic model probe rerun after the build: exit 0, status `passed`; tool_selection, injection_refusal, and vision checks all passed.

@@ -29,7 +29,7 @@ final class Delegate:NSObject,NSXPCListenerDelegate {
 // Offline introspection for the benchmark harness: prints the exact tool catalog the
 // policy enforces, so tests can never drift from what the broker actually accepts.
 if CommandLine.arguments.contains("--dump-tools") {
-    let payload:[String:Any]=["tools":ToolCatalog.definitions,"required":ActionPolicy.allowed.mapValues { $0.sorted() },"reads":ActionPolicy.reads.sorted()]
+    let payload:[String:Any]=["tools":ToolCatalog.definitions,"required":ActionPolicy.allowed.mapValues { $0.sorted() },"reads":ActionPolicy.reads.sorted(),"instant":ActionPolicy.instant.sorted()]
     let data=try! JSONSerialization.data(withJSONObject:payload,options:[.prettyPrinted,.sortedKeys])
     FileHandle.standardOutput.write(data)
     exit(0)

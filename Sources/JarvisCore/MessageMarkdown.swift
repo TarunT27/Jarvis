@@ -32,4 +32,17 @@ public enum MessageMarkdown {
         if fence != nil { result.append(.code(language:language,content:code.joined(separator:"\n"))) }
         flush();return result
     }
+    /// What a voice should say: prose without markup, and code left on screen.
+    public static func plainText(_ source:String) -> String {
+        blocks(source).compactMap { block -> String? in
+            switch block {
+            case .code: return nil
+            case .heading(_,let text),.text(let text):
+                var t=text.replacingOccurrences(of:"\\[([^\\]]+)\\]\\([^)]*\\)",with:"$1",options:.regularExpression)
+                t=t.replacingOccurrences(of:"(?m)^\\s*([-*+]|\\d+\\.)\\s+",with:"",options:.regularExpression)
+                for mark in ["**","__","`","*"] { t=t.replacingOccurrences(of:mark,with:"") }
+                return t
+            }
+        }.joined(separator:"\n").trimmingCharacters(in:.whitespacesAndNewlines)
+    }
 }

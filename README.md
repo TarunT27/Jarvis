@@ -22,6 +22,7 @@ Jarvis is a single-user macOS assistant that combines a native SwiftUI interface
 - Saves explicit memories only after the user asks and approves the action.
 - Searches PDF, Markdown, and text files inside user-approved folders.
 - Can open approved apps and propose file, email, calendar, and reminder actions.
+- Provides supervised computer-use sessions for a selected macOS app, with local screen/context inspection and approval before each input action.
 - Connects to Gmail and Google Calendar with user-provided OAuth credentials.
 - Supports optional Brave Search with a user-provided API key.
 - Shows local activity, model availability, conversation counts, and approved access.
@@ -162,12 +163,42 @@ The broker exposes a fixed catalog rather than arbitrary shell or plugin executi
 | --- | --- |
 | Documents | Search and read approved files |
 | Apps | Open explicitly approved applications |
+| Computer use | Inspect a selected app; propose clicks, text entry, scrolling, focus, and supported shortcuts during a bounded session |
 | Memory | Save an explicitly requested lasting preference |
 | Email | Search/read Gmail, save a local draft, propose sending email |
 | Calendar | List events, propose creating or updating events |
 | Reminders | Propose an Apple Reminder |
 | Files | Propose moving a file or placing it in Trash within approved roots |
-| Web | Search through a configured Brave Search API key |
+| Web | Search through a configured Brave Search API key; propose opening a web address |
+| Mac status | Battery, volume, brightness, dark mode, Wi-Fi, disk, memory, running apps; Spotlight file locations in the home folder |
+| Mac control (instant) | Volume and mute, built-in display brightness, dark mode, media play/pause/next/previous, timers |
+| Mac control (approved) | Quit an app, open a file or web address, read or replace the clipboard, lock the screen, run an Apple Shortcut |
+
+Instant controls change only things you can undo in one gesture, so they run without an approval sheet; they still pass strict argument validation and never count as a safe answer to an ambiguous request. Focus/Do Not Disturb, Bluetooth, Wi-Fi and smart-home requests go through your own Apple Shortcuts (`list_shortcuts`, then an approved `run_shortcut`), because macOS has no public API for them. `open_file` refuses applications, scripts, installers and anything outside the home folder, hidden folders or `~/Library`.
+
+With all 31 chat tools exposed, the everyday model scores 1.000 end-to-end without history and 0.973 with history (37 cases × 3 repeats each), with zero consequential or instant actions on ambiguous requests; the one miss is the "Remember that…" case the app handles deterministically. See `reports/tool-benchmark-qwen3-5-9b.json`.
+
+## Always available
+
+- **Command bar:** Option–Space opens a floating bar over any app. It talks to the current conversation, streams the answer in place, and shows approvals itself, so the main window can stay closed.
+- **“Hey Jarvis”:** optional and off by default (Settings › Always available). A local openWakeWord model scores the microphone for the phrase only; nothing is transcribed or kept until you say it. A wake-started conversation ends by itself after eight seconds of silence. With Bluetooth headphones as the input, always-on listening holds them in call mode, which lowers playback quality.
+- **Menu bar and login:** Jarvis stays in the menu bar with its timers, and can open at login through the system's Login Items.
+
+## Install
+
+```bash
+./scripts/install.sh
+```
+
+Builds a standalone `Jarvis.app` (no project path inside), installs it into `/Applications`, and seeds its runtime at `~/Library/Application Support/JarvisLocal/runtime` from this checkout's `.runtime` using APFS clones, which take no extra disk space. On a Mac without a provisioned runtime, the **Setup** page downloads what is missing: Ollama (its download page), the everyday and Deep models (through the local Ollama API), the whisper speech model (hash-verified), and the optional Kokoro voice and wake-word pack (`scripts/provision-voice.sh`, which needs `uv`). Without the voice pack Jarvis answers aloud with the built-in macOS voice; speech recognition needs only whisper, not Python.
+
+## Supervised computer use
+
+Open **Computer use** in the sidebar, grant Accessibility and Screen Recording when macOS asks, select an approved app, and enter a task. Each input action requires approval. **Stop** ends the session; **Control–Option–Escape** also stops it from another app when the shortcut is available. Sessions expire after five minutes or 30 actions.
+
+The selected app's visible content is in scope for the session. This is broader than the document tools' approved-folder access: app interfaces cannot enforce filesystem folder boundaries. Screen content stays local to model inference, but actions in a connected app can use that app's network connection. Inspect the exact target and text before approving an action. Authentication and protected apps require manual takeover.
+
+See [computer-use setup, limits, and validation](docs/computer-use.md). The local model capability check and synthetic probe do not establish general task reliability; complete the live TextEdit acceptance check on the signed app with permissions enabled.
 
 ## Requirements
 

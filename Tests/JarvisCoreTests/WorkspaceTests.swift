@@ -89,4 +89,9 @@ final class WorkspaceTests:XCTestCase {
         let json=String(decoding:try JSONEncoder().encode(export),as:UTF8.self)
         XCTAssertFalse(json.contains("taskID"));XCTAssertFalse(json.contains("proposal"))
     }
+
+    func testPlainTextDropsMarkupAndCodeForSpeech() {
+        let spoken=MessageMarkdown.plainText("## Done\nSet **volume** to `20`. See [Apple](https://apple.com).\n- one\n2. two\n```swift\nprint(1)\n```")
+        XCTAssertEqual(spoken,"Done\nSet volume to 20. See Apple.\none\ntwo")
+    }
 }

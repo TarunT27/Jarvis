@@ -2,8 +2,13 @@
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
-swift build -c release
-APP="$PROJECT_DIR/Jarvis.app"
+SWIFT_BUILD_ARGS=()
+if [ -n "${JARVIS_SWIFT_SDK:-}" ]; then SWIFT_BUILD_ARGS+=(--sdk "$JARVIS_SWIFT_SDK"); fi
+swift build -c release ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"}
+BIN_DIR="$(swift build -c release ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"} --show-bin-path)"
+# JARVIS_APP_OUT builds somewhere else (install.sh uses it); JARVIS_STANDALONE=1 leaves the
+# project path out of Info.plist, so the app resolves its runtime from Application Support.
+APP="${JARVIS_APP_OUT:-$PROJECT_DIR/Jarvis.app}"
 # Replacing the executable of a RUNNING app kills it with SIGKILL (Code Signature
 # Invalid): the kernel validates each code page against the signature of the file
 # backing it, and overwriting that file invalidates every page not yet resident. The
@@ -20,17 +25,23 @@ if pgrep -f "$APP/Contents/MacOS/Jarvis" >/dev/null 2>&1; then
     sleep 0.3
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/XPCServices/JarvisBroker.xpc/Contents/MacOS"
-cp .build/release/Jarvis "$APP/Contents/MacOS/Jarvis"
-cp .build/release/JarvisBroker "$APP/Contents/XPCServices/JarvisBroker.xpc/Contents/MacOS/JarvisBroker"
+cp "$BIN_DIR/Jarvis" "$APP/Contents/MacOS/Jarvis"
+cp "$BIN_DIR/JarvisBroker" "$APP/Contents/XPCServices/JarvisBroker.xpc/Contents/MacOS/JarvisBroker"
 mkdir -p "$APP/Contents/Resources/Fonts"
 cp Resources/Fonts/*.otf "$APP/Contents/Resources/Fonts/"
 cp Resources/Jarvis.icns "$APP/Contents/Resources/Jarvis.icns"
-PROJECT_DIR="$PROJECT_DIR" /usr/bin/python3 - <<'PY'
+# Helpers an installed app cannot borrow from a project checkout.
+mkdir -p "$APP/Contents/Resources/speech" "$APP/Contents/Resources/bin"
+cp speech/worker.py speech/wakeword.py "$APP/Contents/Resources/speech/"
+cp scripts/provision-voice.sh "$APP/Contents/Resources/provision-voice.sh"
+if [ -x .runtime/whisper-cli ]; then cp .runtime/whisper-cli "$APP/Contents/Resources/bin/whisper-cli"; fi
+PROJECT_DIR="$PROJECT_DIR" APP="$APP" /usr/bin/python3 - <<'PY'
 import os,plistlib,pathlib
-root=pathlib.Path(os.environ['PROJECT_DIR']);app=root/'Jarvis.app/Contents'
-plist={'CFBundleIdentifier':'local.jarvis.mac','CFBundleName':'Jarvis','CFBundleDisplayName':'Jarvis','CFBundleExecutable':'Jarvis','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.1.0','CFBundleVersion':'1','LSMinimumSystemVersion':'26.0','CFBundleIconFile':'Jarvis','NSHighResolutionCapable':True,'NSMicrophoneUsageDescription':'Record speech only while you have started a recording. Audio stays on your Mac.','NSScreenCaptureUsageDescription':'Attach the screen to a local question when you request it.','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.','JarvisProjectRoot':str(root)}
+root=pathlib.Path(os.environ['PROJECT_DIR']);app=pathlib.Path(os.environ['APP'])/'Contents'
+plist={'CFBundleIdentifier':'local.jarvis.mac','CFBundleName':'Jarvis','CFBundleDisplayName':'Jarvis','CFBundleExecutable':'Jarvis','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.1.0','CFBundleVersion':'1','LSMinimumSystemVersion':'26.0','CFBundleIconFile':'Jarvis','NSHighResolutionCapable':True,'NSMicrophoneUsageDescription':'Record speech only while you have started a recording. Audio stays on your Mac.','NSScreenCaptureUsageDescription':'Inspect a selected app during a computer-use task, or attach a screenshot to a local question. Images stay on this Mac.','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.'}
+if os.environ.get('JARVIS_STANDALONE')!='1': plist['JarvisProjectRoot']=str(root)
 (app/'Info.plist').write_bytes(plistlib.dumps(plist))
-helper={'CFBundleIdentifier':'local.jarvis.mac.broker','CFBundleName':'JarvisBroker','CFBundleExecutable':'JarvisBroker','CFBundlePackageType':'XPC!','CFBundleVersion':'1','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.','XPCService':{'ServiceType':'Application','RunLoopType':'NSRunLoop'}}
+helper={'CFBundleIdentifier':'local.jarvis.mac.broker','CFBundleName':'JarvisBroker','NSScreenCaptureUsageDescription':'Inspect only the selected app window during a user-started computer task. Screenshots stay local.','NSAccessibilityUsageDescription':'Read and operate controls in the selected app only during an approved computer task, and send media keys you ask for.','NSAppleEventsUsageDescription':'Switch between light and dark appearance when you ask.','CFBundleExecutable':'JarvisBroker','CFBundlePackageType':'XPC!','CFBundleVersion':'1','NSRemindersFullAccessUsageDescription':'Create reminders only after you approve the exact details.','XPCService':{'ServiceType':'Application','RunLoopType':'NSRunLoop'}}
 (app/'XPCServices/JarvisBroker.xpc/Contents/Info.plist').write_bytes(plistlib.dumps(helper))
 PY
 # Hardened Runtime (--options runtime) blocks microphone access unless the app carries
@@ -77,8 +88,25 @@ if [ "$SIGN_AS" = "-" ]; then
 else
     printf 'Signing with stable identity: %s\n' "$SIGN_AS"
 fi
-# The broker never records; it stays without the microphone entitlement.
-codesign --force --sign "$SIGN_AS" --options runtime "$APP/Contents/XPCServices/JarvisBroker.xpc"
+# The broker never records; it stays without the microphone entitlement. It does send
+# Apple Events (appearance changes through System Events), which Hardened Runtime blocks
+# outright - before the Automation prompt - unless this entitlement is present.
+BROKER_ENTITLEMENTS="$PROJECT_DIR/.build/jarvis-broker.entitlements"
+cat > "$BROKER_ENTITLEMENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+codesign --force --sign "$SIGN_AS" --options runtime --entitlements "$BROKER_ENTITLEMENTS" "$APP/Contents/XPCServices/JarvisBroker.xpc"
+# Nested code is signed before the bundle that seals it.
+if [ -f "$APP/Contents/Resources/bin/whisper-cli" ]; then
+    codesign --force --sign "$SIGN_AS" --options runtime "$APP/Contents/Resources/bin/whisper-cli"
+fi
 codesign --force --sign "$SIGN_AS" --options runtime --entitlements "$ENTITLEMENTS" "$APP"
 codesign --verify --deep --strict "$APP"
 printf 'Built %s\n' "$APP"

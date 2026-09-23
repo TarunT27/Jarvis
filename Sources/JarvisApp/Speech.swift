@@ -27,8 +27,10 @@ final class SpeechWorker: @unchecked Sendable {
                         self.inFlight = true
                         if self.process?.isRunning != true {
                             let p=Process(), i=Pipe(), o=Pipe()
-                            p.executableURL=Configuration.project.appendingPathComponent(".runtime/venv/bin/python")
-                            p.arguments=[Configuration.project.appendingPathComponent("speech/worker.py").path]
+                            let paths=RuntimePaths.current
+                            p.executableURL=paths.python
+                            p.arguments=[paths.speechWorker.path]
+                            var env=ProcessInfo.processInfo.environment;env["JARVIS_RUNTIME"]=paths.root.path;p.environment=env
                             p.standardInput=i; p.standardOutput=o; p.standardError=FileHandle.nullDevice
                             do { try p.run() } catch { self.inFlight=false; self.lock.unlock(); throw error }; self.process=p; self.input=i.fileHandleForWriting; self.output=o.fileHandleForReading; self.remainder=Data()
                         }
@@ -178,28 +180,48 @@ final class SampleBuffer: @unchecked Sendable {
     /// Ends a session and throws its audio away without transcribing it.
     func discard() { sessionActive=false; teardownEngine(); _=buffer.take() }
     func play(_ data:Data) throws { player=try AVAudioPlayer(data:data); player?.play() }
-    var isPlaying:Bool { player?.isPlaying == true }
-    func stopPlayback() { player?.stop();player=nil }
+    /// The built-in macOS voice, used when the Kokoro voice pack is not installed.
+    func speakWithSystemVoice(_ text:String) {
+        let utterance=AVSpeechUtterance(string:text)
+        utterance.voice=Self.systemVoice
+        synthesizer.speak(utterance)
+    }
+    var isPlaying:Bool { player?.isPlaying == true || synthesizer.isSpeaking }
+    func stopPlayback() { player?.stop();player=nil;synthesizer.stopSpeaking(at:.immediate) }
+    private let synthesizer=AVSpeechSynthesizer()
+    /// The best-sounding English voice installed: premium, then enhanced, then default.
+    private static let systemVoice:AVSpeechSynthesisVoice? = {
+        let english=AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        let preferred=english.filter { $0.language==Locale.current.identifier.replacingOccurrences(of:"_",with:"-") }
+        return (preferred.isEmpty ? english:preferred).max { $0.quality.rawValue<$1.quality.rawValue } ?? AVSpeechSynthesisVoice(language:"en-US")
+    }()
     func cancel() { discard();stopPlayback() }
 }
 @MainActor final class PushToTalkShortcut {
     private var reference: EventHotKeyRef?
     private var handler: EventHandlerRef?
+    private(set) var isRegistered = false
+    private let identifier: UInt32
     var onPress: (() -> Void)?; var onRelease: (() -> Void)?
-    init() {
+    init(identifier: UInt32 = 1, key: UInt32 = 49, modifiers: UInt32 = UInt32(controlKey|optionKey)) {
+        self.identifier = identifier
         var events=[EventTypeSpec(eventClass:OSType(kEventClassKeyboard),eventKind:UInt32(kEventHotKeyPressed)),EventTypeSpec(eventClass:OSType(kEventClassKeyboard),eventKind:UInt32(kEventHotKeyReleased))]
         let ptr=Unmanaged.passUnretained(self).toOpaque()
         InstallEventHandler(GetApplicationEventTarget(),{ _,event,data in
             guard let event,let data else { return OSStatus(eventNotHandledErr) }
-            let pressed=GetEventKind(event)==UInt32(kEventHotKeyPressed)
             let shortcut=Unmanaged<PushToTalkShortcut>.fromOpaque(data).takeUnretainedValue()
+            var hotKey = EventHotKeyID()
+            guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                    MemoryLayout<EventHotKeyID>.size, nil, &hotKey) == noErr,
+                  hotKey.signature == 0x4A415256, hotKey.id == shortcut.identifier else { return OSStatus(eventNotHandledErr) }
+            let pressed=GetEventKind(event)==UInt32(kEventHotKeyPressed)
             Task { @MainActor in if pressed { shortcut.onPress?() } else { shortcut.onRelease?() } }
             return noErr
         },2,&events,ptr,&handler)
-        register(key:49,modifiers:UInt32(controlKey|optionKey))
+        register(key:key,modifiers:modifiers)
     }
     func register(key:UInt32,modifiers:UInt32) {
         if let reference { UnregisterEventHotKey(reference) }
-        RegisterEventHotKey(key,modifiers,EventHotKeyID(signature:0x4A415256,id:1),GetApplicationEventTarget(),0,&reference)
+        isRegistered = RegisterEventHotKey(key,modifiers,EventHotKeyID(signature:0x4A415256,id:identifier),GetApplicationEventTarget(),0,&reference) == noErr
     }
 }

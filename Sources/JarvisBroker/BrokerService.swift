@@ -17,6 +17,29 @@ import JarvisCore
     private var taskConversations:[UUID:UUID]=[:]
     private let privacy=PrivacyLedger()
     private let store=EKEventStore()
+    private let computer=NativeComputerController()
+    private let system=SystemController()
+    private let computerSessions=ComputerSessionPolicy()
+    private var computerExpiry:Task<Void,Never>?
+
+    private func endComputerSession(taskID:UUID?=nil) {
+        guard let ended=computerSessions.stop(taskID:taskID) else { return }
+        computer.stop();computerExpiry?.cancel();computerExpiry=nil
+        policy.revokeComputerApprovals(taskID:ended.taskID)
+    }
+    private func expireComputerSession() {
+        if let ended=computerSessions.expireIfNeeded() {
+            computer.stop();computerExpiry?.cancel();computerExpiry=nil
+            policy.revokeComputerApprovals(taskID:ended.taskID)
+        }
+    }
+    private func computerSession(task:UUID) throws -> ComputerSession {
+        expireComputerSession()
+        guard let session=computerSessions.session,session.taskID==task,active.contains(task) else {
+            throw JarvisError.message("Start an explicit computer task for a selected app first.")
+        }
+        return session
+    }
 
     /// Opens the encrypted vault with the root key the app read from the Keychain.
     /// The key is held in memory for the life of this service and never written to disk.
@@ -60,7 +83,32 @@ import JarvisCore
             return BrokerReply(result:"Unlocked")
         }
         let (vault,google)=try ready()
+        expireComputerSession()
         switch r.operation {
+        case "computer_permissions":
+            return BrokerReply(result:try json(NativeComputerController.permissions(prompt:r.value=="prompt")))
+        case "computer_start":
+            guard let id=r.taskID,active.contains(id),let bundleID=r.value,apps.contains(bundleID) else {
+                throw JarvisError.message("Start a task and choose an approved application.")
+            }
+            try markPrivate(task:id)
+            let session=try computerSessions.start(taskID:id,bundleID:bundleID)
+            do {
+                let name=try await computer.start(bundleID:bundleID)
+                guard computerSessions.isActive(taskID:id,sessionID:session.id),active.contains(id) else { throw CancellationError() }
+                computerExpiry=Task { [weak self] in
+                    do { try await Task.sleep(for:.seconds(300)) } catch { return }
+                    guard let self,self.computerSessions.isActive(taskID:id,sessionID:session.id) else { self?.expireComputerSession();return }
+                    self.endComputerSession(taskID:id)
+                }
+                return BrokerReply(result:name)
+            } catch { endComputerSession(taskID:id);throw error }
+        case "computer_stop":
+            guard let id=r.taskID else { throw JarvisError.message("Missing computer task.") }
+            endComputerSession(taskID:id);return BrokerReply(result:"Computer control stopped")
+        case "computer_status":
+            if let session=computerSessions.session { return BrokerReply(result:String(decoding:try JSONEncoder().encode(session),as:UTF8.self)) }
+            return BrokerReply(result:"null")
         case "status": return BrokerReply(result:try json(["google":google.connected,"brave":((try? vault.credential("brave-key")) ?? nil) != nil,"folders":roots.map(\.path),"apps":apps.sorted()]))
         case "begin":
             guard let id=r.taskID,let conversation=r.conversationID else { throw JarvisError.message("Missing task.") }
@@ -79,20 +127,32 @@ import JarvisCore
             privacy.begin(task:id,conversation:conversation,carriesPrivateContent:isPrivate)
             return BrokerReply(result:try json(["web_allowed":privacy.webAllowed(conversation:conversation)]))
         // Ending a task must NOT clear the taint: the conversation continues.
-        case "end": if let id=r.taskID { policy.end(id);active.remove(id);privacy.endTask(id);taskConversations.removeValue(forKey:id) };return BrokerReply(result:"Ended")
-        case "cancel": policy.cancelAll();active.removeAll();privacy.forgetTasks();taskConversations.removeAll();return BrokerReply(result:"Stopped")
+        case "end": if let id=r.taskID { endComputerSession(taskID:id);policy.end(id);active.remove(id);privacy.endTask(id);taskConversations.removeValue(forKey:id) };return BrokerReply(result:"Ended")
+        case "cancel": endComputerSession();policy.cancelAll();active.removeAll();privacy.forgetTasks();taskConversations.removeAll();return BrokerReply(result:"Stopped")
         case "propose":
             guard let call=r.call,let id=r.taskID,active.contains(id) else { throw JarvisError.message("Task is no longer active.") }
+            var computerSessionID:UUID?
+            if ComputerToolCatalog.isComputerTool(call.name) {
+                computerSessionID=try computerSession(task:id).id
+                try markPrivate(task:id)
+            } else if computerSessions.session != nil {
+                throw JarvisError.message("Only supervised computer tools are available while a computer session is active.")
+            }
             if call.name=="web_search" {
                 guard let conversation=taskConversations[id],privacy.webAllowed(task:id),
                       try !ConversationPrivacy.isPrivate(conversation,in:vault) else {
                     throw JarvisError.message("This conversation contains private context. Turn off Include saved memories in response settings and start a new conversation for public web search.")
                 }
             }
-            if let proposal=try policy.propose(call,taskID:id) { return BrokerReply(proposal:proposal) }
+            let deadline=ComputerToolCatalog.mutating.contains(call.name) ? try computer.approvalDeadline(for:call):nil
+            if let proposal=try policy.propose(call,taskID:id,computerSessionID:computerSessionID,expiresAt:deadline) { return BrokerReply(proposal:proposal) }
             return try await run(call,task:id)
         case "approve":
             guard let proposal=r.proposal else { throw JarvisError.message("Missing approval.") }
+            if ComputerToolCatalog.isComputerTool(proposal.call.name) {
+                guard let sessionID=proposal.computerSessionID else { throw JarvisError.message("Missing computer session approval.") }
+                _=try computerSessions.validateApproval(taskID:proposal.taskID,sessionID:sessionID)
+            } else if computerSessions.session != nil { throw JarvisError.message("Other actions are paused during computer use.") }
             let call=try policy.consume(proposal)
             return try await run(call,task:proposal.taskID,actionID:proposal.id)
         case "workspace_list":
@@ -137,7 +197,7 @@ import JarvisCore
         case "allow_app":
             guard let id=r.value,NSWorkspace.shared.urlForApplication(withBundleIdentifier:id) != nil else { throw JarvisError.message("Choose an installed application.") }
             apps.insert(id);try vault.put(kind:"settings",body:json(apps.sorted()),id:"apps");return BrokerReply(result:"Application approved")
-        case "remove_app": apps.remove(r.value ?? "");try vault.put(kind:"settings",body:json(apps.sorted()),id:"apps");return BrokerReply(result:"Application access revoked")
+        case "remove_app": if computerSessions.session?.bundleID==r.value { endComputerSession() };apps.remove(r.value ?? "");try vault.put(kind:"settings",body:json(apps.sorted()),id:"apps");return BrokerReply(result:"Application access revoked")
         case "brave_key": try vault.setCredential(Data((r.value ?? "").utf8),for:"brave-key");return BrokerReply(result:"Search key saved")
         case "disconnect_brave": try vault.setCredential(nil,for:"brave-key");return BrokerReply(result:"Search disconnected")
         case "google_client": try google.configure(r.value ?? "");return BrokerReply(result:"Google client imported")
@@ -154,7 +214,32 @@ import JarvisCore
     private func run(_ call:ToolCall,task:UUID,actionID:UUID=UUID()) async throws -> BrokerReply {
         guard active.contains(task) else { throw JarvisError.message("Task was stopped.") }
         let a=call.arguments;let (vault,google)=try ready()
+        if ComputerToolCatalog.isComputerTool(call.name) {
+            let session=try computerSession(task:task)
+            guard apps.contains(session.bundleID) else { endComputerSession(taskID:task);throw JarvisError.message("App access was revoked.") }
+            try markPrivate(task:task)
+            if ComputerToolCatalog.mutating.contains(call.name) {
+                _=try computerSessions.reserveAction(taskID:task,sessionID:session.id)
+            }
+            do {
+                let observation=try await computer.execute(call)
+                guard active.contains(task),computerSessions.isActive(taskID:task,sessionID:session.id) else { throw CancellationError() }
+                try vault.put(kind:"audit",body:try json(["tool":call.name,"status":"completed","action_id":actionID.uuidString]))
+                return BrokerReply(result:observation.text,image:observation.image)
+            } catch {
+                try? vault.put(kind:"audit",body:try json(["tool":call.name,"status":"stopped_or_unconfirmed","action_id":actionID.uuidString]))
+                endComputerSession(taskID:task)
+                throw error
+            }
+        }
         var result=""
+        if SystemToolCatalog.isSystemTool(call.name) {
+            if SystemToolCatalog.privateReads.contains(call.name) { try markPrivate(task:task) }
+            result=try await system.execute(call)
+            guard active.contains(task) else { throw CancellationError() }
+            try vault.put(kind:"audit",body:try json(["tool":call.name,"status":"completed","action_id":actionID.uuidString]))
+            return BrokerReply(result:result)
+        }
         switch call.name {
         case "search_documents":
             try markPrivate(task:task)

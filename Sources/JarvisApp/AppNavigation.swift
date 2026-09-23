@@ -4,14 +4,14 @@ import SwiftUI
 /// Assistant continues to own the selected page and all application state.
 enum AppPage: String, CaseIterable, Identifiable {
     case overview = "Overview", chat = "Chat", directory = "Chat directory", memory = "Memory"
-    case workspace = "Notes & prompts"
+    case workspace = "Notes & prompts", computer = "Computer use", setup = "Setup"
     case connections = "Connections", settings = "Settings", activity = "Activity"
     var id: String { rawValue }
 
     /// The single ordering. The sidebar rows, the Go menu and the ⌃⌘number
     /// shortcuts all read it, so a row's position and its shortcut cannot drift
     /// apart - which they had, leaving ⌃⌘1 on the second row.
-    static var allCases: [AppPage] { [.chat, .overview, .directory, .memory, .connections, .workspace] }
+    static var allCases: [AppPage] { [.chat, .overview, .directory, .memory, .connections, .workspace, .computer, .setup] }
 
     var symbol: String {
         switch self {
@@ -19,6 +19,8 @@ enum AppPage: String, CaseIterable, Identifiable {
         case .chat: "bubble.left.and.bubble.right"
         case .directory: "folder"
         case .workspace: "note.text"
+        case .computer: "computermouse"
+        case .setup: "checklist"
         case .memory: "brain"
         case .connections: "point.3.connected.trianglepath.dotted"
         case .settings: "slider.horizontal.3"

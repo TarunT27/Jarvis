@@ -5,7 +5,8 @@ import IOKit.ps
     private var server:Process?
     func start() async throws {
         if (try? await ModelClient().installed()) != nil { return }
-        let p=Process(); p.executableURL=Configuration.project.appendingPathComponent(".runtime/ollama/ollama");p.arguments=["serve"]
+        guard let ollama=RuntimePaths.current.ollama else { throw JarvisError.message("Ollama is not installed. Open Setup to install the local model service.") }
+        let p=Process(); p.executableURL=ollama;p.arguments=["serve"]
         var env=ProcessInfo.processInfo.environment
         env["OLLAMA_HOST"]="127.0.0.1:11439";env["OLLAMA_NO_CLOUD"]="1";env["OLLAMA_MODELS"]=Configuration.modelStore.path
         env["OLLAMA_CONTEXT_LENGTH"]="8192";env["OLLAMA_MAX_LOADED_MODELS"]="1";env["OLLAMA_NUM_PARALLEL"]="1";env["OLLAMA_KEEP_ALIVE"]="5m"

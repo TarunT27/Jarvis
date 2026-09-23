@@ -3,13 +3,14 @@ Audio is transported as in-memory base64 WAV and never saved by the worker.
 """
 import base64, contextlib, io, json, os, re, subprocess, sys, time
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
-os.environ['HF_HOME'] = str(ROOT / '.runtime/huggingface')
+# The app passes the runtime it resolved; a bare checkout falls back to its own .runtime.
+RUNTIME = Path(os.environ.get('JARVIS_RUNTIME', Path(__file__).resolve().parents[1] / '.runtime'))
+os.environ['HF_HOME'] = str(RUNTIME / 'huggingface')
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 
-WHISPER = [str(ROOT/'.runtime/whisper-cli'), '-m', str(ROOT/'.runtime/models/ggml-large-v3-turbo-q5_0.bin'),
+WHISPER = [str(RUNTIME/'whisper-cli'), '-m', str(RUNTIME/'models/ggml-large-v3-turbo-q5_0.bin'),
            '-f', '-', '-nt', '-t', '4']
 # Biases decoding toward Telugu script. Measured: it clearly helps pure Telugu, but hurts
 # English badly and hurts code-switched speech, so it is applied only to an explicit
