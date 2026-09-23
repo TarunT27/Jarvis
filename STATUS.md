@@ -1,11 +1,63 @@
-# Jarvis — Stage 1 status
+# Jarvis — status
 
 Local macOS assistant: SwiftUI menu-bar app, Ollama on `127.0.0.1:11439`, whisper.cpp
 transcription, Kokoro speech, permission-gated tools behind an XPC broker.
 
-Measured on this Mac (M5 Pro, 48 GB). Regenerate everything with the commands below.
+Measured on this Mac (M5 Pro, 48 GB, macOS 27.0, Swift 6.4). Regenerate everything with
+the commands below.
 
-## What changed this session
+## Stage 2 — local OS assistant (2026-09-23)
+
+### What was added
+
+| Area | What exists now |
+|---|---|
+| Mac control | 16 broker tools in `SystemTools.swift`. Reads: `system_status`, `list_apps`, `find_files` (Spotlight, paths only), `list_shortcuts`. Instant: `set_volume`, `set_brightness`, `set_dark_mode`, `media_control`, `set_timer`. Approved: `quit_app`, `open_url`, `open_file`, `clipboard_read`, `clipboard_write`, `lock_screen`, `run_shortcut`. |
+| Summon | Option–Space command bar (`QuickBar.swift`), menu bar voice/timer items, launch at login, opt-in "Hey Jarvis" (`WakeWord.swift`, `speech/wakeword.py`). |
+| Computer use | The supervised single-app session work, landed and unit-tested (see `docs/computer-use.md`). |
+| Standalone | `RuntimePaths` resolves Application Support or the checkout; Swift transcription (`LocalTranscriber.swift`) needs no Python; macOS-voice fallback; Setup page; `scripts/install.sh`; `scripts/provision-voice.sh`. |
+
+"Instant" is a new policy class: state changes undoable in one gesture run without an
+approval sheet, but the benchmark scores them as consequential on ambiguous requests.
+
+### Measurements
+
+| | Result |
+|---|---|
+| Tool routing, 31 chat tools, 37 cases × 3 | 1.000 no history, 0.973 with history; argument validity 1.000; 0 consequential/instant actions on ambiguity; median 0.9 s |
+| Only miss | "Remember that…" with history (0/3), already handled by `MemoryRequest` in the app |
+| Regression caught and fixed | "What does my lease say about pets?" routed to `find_files` 6/6 until the `find_files`/`search_documents` descriptions were sharpened; now 6/6 correct |
+| Wake word, synthetic `say` clips | "Hey Jarvis" 0.995–0.999 (three voices); a sentence starting "Hey, what's…" 0.000; ~16 ms of compute per second of audio |
+| Swift transcription path | Same whisper arguments as the worker; `jfk.wav` transcribed exactly by the bundled, hardened-runtime-signed binary |
+| Standalone install | Installed copy has no `JarvisProjectRoot`; runtime seeded by APFS clone with no change in disk usage; cloned venv imports mlx_audio, openwakeword, onnxruntime; Setup all green; existing vault opened |
+
+### Verified in the running app
+
+System status answered correctly (volume 56 %, battery 38 % charging). A clipboard write
+raised the approval sheet; declining ran nothing. The command bar opened on Option–Space,
+answered in place, and closes on a real Escape key event. The wake-word toggle starts and
+stops the detector. With an empty runtime, Setup offers the 574 MB speech model and the voice
+pack, and the voice installer fails cleanly with a `brew install uv` message when uv is absent.
+
+Four defects were found this way and fixed: `build.sh` failed under bash 3.2 (empty array
+with `set -u`); the command bar painted an opaque canvas; the first open after launch dropped
+the focus request; and Escape never closed the bar. The last one also explains stray digits
+("7788") that appeared in the bar during testing: the text field's field editor treats Escape
+as "complete", opens a completion list, and later keystrokes chose from it. Escape is now
+intercepted by a local key monitor before the field sees it.
+
+### Not yet verified — needs you
+
+- **"Hey Jarvis" by voice.** The default input is AirPods, so speaker playback could not
+  reach the microphone. Always-on listening also holds Bluetooth headphones in call mode.
+- **Live computer-use acceptance** in TextEdit (Accessibility and Screen Recording grants).
+- **First use of timers, media keys and dark mode**, each behind a one-time macOS prompt
+  (Notifications, Accessibility for JarvisBroker, Automation for System Events).
+- **Setup downloads** (model pull, whisper download and hash check, voice-pack install) have
+  not run end to end; everything was already installed here.
+- **A Mac with no Ollama server running**, where Jarvis starts the Ollama app's engine itself.
+
+## Stage 1 changes
 
 ### 1. Voice pipeline produced empty transcripts (fixed)
 
@@ -207,6 +259,8 @@ costs one more round of permission prompts and nothing else.
 ## Reproducing the measurements
 
 ```bash
+./scripts/install.sh                    # standalone app in /Applications + seeded runtime
+JARVIS_CASES="lease,volume" python3 scripts/tool_benchmark.py   # rerun a subset
 swift test                              # security and policy tests
 ./scripts/build.sh                      # build + sign Jarvis.app (see Build requirements)
 python3 scripts/tool_benchmark.py       # tool-call reliability -> reports/
@@ -224,6 +278,13 @@ log show --last 10m --predicate 'subsystem == "local.jarvis.mac"' --info
 ```
 
 ## Known limits
+
+- Focus/Do Not Disturb, Bluetooth, Wi-Fi and smart-home control exist only through the
+  user's own Shortcuts; macOS has no public API for them.
+- Brightness uses the private DisplayServices framework and covers the built-in display
+  only; screen locking uses the private login framework, falling back to display sleep.
+- Timers live in memory and end when Jarvis quits.
+- The wake word is English-only and has only been measured on synthetic speech.
 
 - Locally signed and local-only. The identity is self-signed, so Gatekeeper still treats
   the app as unidentified. Distribution needs Developer ID, notarization, and probably

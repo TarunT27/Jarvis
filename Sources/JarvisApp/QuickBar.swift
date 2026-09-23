@@ -7,10 +7,8 @@ import JarvisCore
 /// A borderless panel that takes the keyboard without activating Jarvis, so the
 /// command bar opens over whatever app you are in and hands focus straight back.
 private final class QuickPanel:NSPanel {
-    var onEscape:(()->Void)?
     override var canBecomeKey:Bool { true }
     override var canBecomeMain:Bool { false }
-    override func cancelOperation(_ sender:Any?) { onEscape?() }
 }
 
 /// The always-available entry point: a global shortcut opens a Spotlight-style bar
@@ -25,6 +23,7 @@ private final class QuickPanel:NSPanel {
     /// openWindow action, so the bar borrows the one the menu and main window carry.
     var openMainWindow:(()->Void)?
     var shortcutAvailable:Bool { shortcut.isRegistered }
+    private var escapeMonitor:Any?
     static let size=NSSize(width:700,height:520)
 
     func install(_ assistant:Assistant) {
@@ -61,7 +60,6 @@ private final class QuickPanel:NSPanel {
         panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.transient]
         panel.isOpaque=false;panel.backgroundColor = .clear;panel.hasShadow=false
         panel.isMovableByWindowBackground=true
-        panel.onEscape={ [weak self] in self?.hide() }
         let host=NSHostingView(rootView:QuickBarView(assistant:assistant,close:{ [weak self] in self?.hide() })
             // Not jarvisAppearance(): that paints the window canvas, and everything around
             // the bar has to stay see-through.
@@ -76,6 +74,16 @@ private final class QuickPanel:NSPanel {
                 guard let self,let assistant=self.assistant,!assistant.busy,assistant.proposal==nil,!assistant.recording else { return }
                 self.hide()
             }
+        }
+        // Escape has to be caught before the text field: its field editor treats Escape
+        // as "complete this word", opens a completion list, and the next keystrokes pick
+        // from it - neither cancelOperation nor onExitCommand ever sees the key. While an
+        // approval is up, Escape passes through so it keeps meaning Decline.
+        escapeMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
+            guard event.keyCode==53,let self,let panel=self.panel,event.window===panel,
+                  self.assistant?.proposal==nil else { return event }
+            self.hide()
+            return nil
         }
         self.panel=panel
         return panel
@@ -115,8 +123,6 @@ struct QuickBarView:View {
         }
         .frame(width:QuickBar.size.width,height:QuickBar.size.height,alignment:.top)
         .onChange(of:assistant.quickBarFocus,initial:true) { _,_ in focused=true }
-        // The focused field consumes Escape before the panel's cancelOperation sees it.
-        .onExitCommand { if assistant.proposal==nil { close() } }
     }
 
     private var inputRow:some View {
@@ -192,3 +198,4 @@ enum LoginItem {
         if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
     }
 }
+
