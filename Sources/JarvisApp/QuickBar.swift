@@ -153,7 +153,9 @@ struct QuickBarView:View {
             ScrollView {
                 VStack(alignment:.leading,spacing:14) {
                     ForEach(exchange) { message in
-                        if message.role=="user" {
+                        if let run=assistant.claudeRun,run.messageID==message.id {
+                            ClaudeRunView(run:run) { assistant.stop() }
+                        } else if message.role=="user" {
                             Text(message.content).font(JarvisTypography.font(.medium,style:.callout)).foregroundStyle(JarvisTheme.secondary)
                         } else {
                             MessageMarkdownView(content:message.content).foregroundStyle(JarvisTheme.text)

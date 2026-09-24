@@ -39,6 +39,21 @@ import JarvisCore
     }
 }
 
+/// A hand-off in flight, for the live progress card. Cleared when the run ends; the
+/// finished message keeps the result as ordinary Markdown.
+@MainActor @Observable final class ClaudeRun {
+    enum Phase:Int { case sending,thinking,working,finishing }
+    let messageID:UUID
+    let model:String
+    let effort:String
+    let project:String?
+    let started=Date()
+    var phase:Phase = .sending
+    var steps:[String]=[]
+    var narration=""
+    init(messageID:UUID,model:String,effort:String,project:String?) { self.messageID=messageID;self.model=model;self.effort=effort;self.project=project }
+}
+
 extension Assistant {
     var claudeAvailable:Bool { ClaudeCLI.locate() != nil }
 
@@ -100,6 +115,9 @@ extension Assistant {
         let header="**Claude · \(ClaudeCatalog.name(of:handoff.model)) · \(handoff.effort)**"+(project.map { " · project **\($0.name)**" } ?? "")
         var message=ChatMessage(role:"assistant",content:header+"\n\nStarting…",conversationID:conversation)
         messages.append(message)
+        let run=ClaudeRun(messageID:message.id,model:handoff.model,effort:handoff.effort,project:project?.name)
+        claudeRun=run
+        defer { if claudeRun === run { claudeRun=nil } }
         var activity:[String]=[],narration="",finished:(result:String,session:String,isError:Bool,seconds:Double,cost:Double?)?
         func render() {
             guard let index=messages.firstIndex(where:{ $0.id==message.id }) else { return }
@@ -128,10 +146,10 @@ extension Assistant {
             for try await line in output.fileHandleForReading.bytes.lines {
                 for event in ClaudeStream.parse(line) {
                     switch event {
-                    case .started: status="Claude is working · \(ClaudeCatalog.name(of:handoff.model))"
-                    case .activity(let step): activity.append(step);narration="";status="Claude · \(step)"
-                    case .text(let text): narration=text
-                    case .finished(let result,let session,let isError,let seconds,let cost): finished=(result,session,isError,seconds,cost)
+                    case .started: status="Claude is thinking · \(ClaudeCatalog.name(of:handoff.model))";run.phase = .thinking
+                    case .activity(let step): activity.append(step);narration="";status="Claude · \(step)";run.phase = .working;run.steps.append(step);run.narration=""
+                    case .text(let text): narration=text;run.narration=text
+                    case .finished(let result,let session,let isError,let seconds,let cost): finished=(result,session,isError,seconds,cost);run.phase = .finishing
                     }
                 }
                 guard epoch==id else { throw CancellationError() }
@@ -264,6 +282,78 @@ struct ClaudeHandoffView:View {
                 Text("Creates ~/Jarvis Builds/\(draft.newProjectName.isEmpty ? "<name>" : draft.newProjectName). Claude can edit files and run commands only inside it.")
                     .font(.caption).foregroundStyle(JarvisTheme.secondary)
             }
+        }
+    }
+}
+
+/// The live card shown in place of a hand-off's message while Claude works.
+struct ClaudeRunView:View {
+    let run:ClaudeRun
+    let stop:()->Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let stages=["Sent","Thinking","Working","Finishing"]
+
+    var body:some View {
+        VStack(alignment:.leading,spacing:14) {
+            HStack(spacing:10) {
+                Image(systemName:"sparkles").font(.system(size:16,weight:.semibold)).foregroundStyle(JarvisTheme.accent)
+                    .symbolEffect(.pulse,options:.repeating,isActive:!reduceMotion)
+                Text("Claude · \(ClaudeCatalog.name(of:run.model)) · \(run.effort)").font(JarvisTypography.font(.semibold,style:.headline))
+                if let project=run.project {
+                    Text(project).font(.caption.weight(.medium)).padding(.horizontal,7).padding(.vertical,2)
+                        .background(JarvisTheme.selection.opacity(0.22),in:Capsule())
+                }
+                Spacer()
+                TimelineView(.periodic(from:run.started,by:1)) { context in
+                    let s=Int(context.date.timeIntervalSince(run.started))
+                    Text(String(format:"%d:%02d",s/60,s%60)).font(.callout).monospacedDigit().foregroundStyle(JarvisTheme.secondary)
+                }
+                Button("Stop",action:stop).buttonStyle(.borderless).foregroundStyle(JarvisTheme.error)
+            }
+            HStack(spacing:0) {
+                ForEach(Array(stages.enumerated()),id:\.offset) { index,name in
+                    let reached=index<=run.phase.rawValue,current=index==run.phase.rawValue
+                    VStack(spacing:5) {
+                        ZStack {
+                            Circle().fill(reached ? JarvisTheme.accent : JarvisTheme.border).frame(width:10,height:10)
+                            if current && !reduceMotion {
+                                Circle().stroke(JarvisTheme.accent.opacity(0.5),lineWidth:2).frame(width:18,height:18)
+                                    .phaseAnimator([0.7,1.3]) { $0.scaleEffect($1).opacity(2-$1) } animation: { _ in .easeInOut(duration:0.9) }
+                            }
+                        }.frame(height:18)
+                        Text(name).font(.caption2.weight(current ? .semibold:.regular)).foregroundStyle(reached ? JarvisTheme.text : JarvisTheme.tertiary)
+                    }
+                    if index<stages.count-1 {
+                        Rectangle().fill(index<run.phase.rawValue ? JarvisTheme.accent : JarvisTheme.border).frame(height:2).padding(.bottom,16)
+                    }
+                }
+            }
+            .animation(.easeInOut(duration:0.3),value:run.phase)
+            ProgressView().progressViewStyle(.linear).tint(JarvisTheme.accent)
+            Text(currentLine).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.middle)
+            if run.steps.count>1 {
+                VStack(alignment:.leading,spacing:4) {
+                    ForEach(Array(run.steps.dropLast().suffix(4).enumerated()),id:\.offset) { _,step in
+                        Label(step,systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(JarvisTheme.secondary).lineLimit(1)
+                    }
+                }
+            }
+            if !run.narration.isEmpty {
+                Text(run.narration).font(.caption).foregroundStyle(JarvisTheme.tertiary).lineLimit(3)
+            }
+        }
+        .padding(16)
+        .background(JarvisTheme.surface,in:RoundedRectangle(cornerRadius:14,style:.continuous))
+        .overlay(RoundedRectangle(cornerRadius:14,style:.continuous).strokeBorder(JarvisTheme.accent.opacity(0.35),lineWidth:1))
+        .accessibilityElement(children:.combine)
+        .accessibilityLabel("Claude is working: \(currentLine)")
+    }
+    private var currentLine:String {
+        switch run.phase {
+        case .sending: "Sending your prompt to Claude…"
+        case .thinking: "Claude is thinking…"
+        case .working: run.steps.last ?? "Working…"
+        case .finishing: "Wrapping up the result…"
         }
     }
 }

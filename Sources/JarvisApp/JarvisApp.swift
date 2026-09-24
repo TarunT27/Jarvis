@@ -23,7 +23,7 @@ import JarvisCore
                 CommandGroup(replacing:.newItem) { Button("New Conversation") { assistant.newChat() }.keyboardShortcut("n") }
                 JarvisNavigationCommands(assistant: assistant)
             }
-        MenuBarExtra("Jarvis",systemImage:assistant.recording ? "mic.fill":(assistant.wakeWordListening ? "waveform.circle.fill":"waveform.circle")) {
+        MenuBarExtra("Jarvis",systemImage:assistant.claudeRun != nil ? "sparkles":(assistant.recording ? "mic.fill":(assistant.wakeWordListening ? "waveform.circle.fill":"waveform.circle"))) {
             MenuContent(assistant:assistant)
         }
     }

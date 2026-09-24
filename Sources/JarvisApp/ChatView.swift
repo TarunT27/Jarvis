@@ -42,7 +42,7 @@ struct ChatView: View {
                         if assistant.messages.isEmpty { suggestions }
                         LazyVStack(alignment: .leading, spacing: 30) {
                             ForEach(assistant.messages) { message in
-                                ConversationMessageView(message: message)
+                                ConversationMessageView(message: message, run: assistant.claudeRun?.messageID == message.id ? assistant.claudeRun : nil) { assistant.stop() }
                                     .transition(.opacity.combined(with: .offset(y: 7)))
                                     .contextMenu {
                                         Button("Copy message") { NSPasteboard.general.clearContents();NSPasteboard.general.setString(message.content,forType:.string) }
@@ -543,6 +543,8 @@ private struct LocalStatusLabelStyle: LabelStyle {
 
 private struct ConversationMessageView: View {
     let message: ChatMessage
+    var run: ClaudeRun? = nil
+    var stop: () -> Void = {}
     @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 15
     private var isUser: Bool { message.role == "user" }
     var body: some View {
@@ -565,8 +567,12 @@ private struct ConversationMessageView: View {
                             Text(message.created, format: .dateTime.hour().minute())
                                 .font(.caption).foregroundStyle(JarvisTheme.tertiary)
                         }
-                        MessageMarkdownView(content:message.content.isEmpty ? "Working on it…" : message.content)
-                            .frame(maxWidth:.infinity,alignment:.leading)
+                        if let run {
+                            ClaudeRunView(run: run, stop: stop).frame(maxWidth: 640, alignment: .leading)
+                        } else {
+                            MessageMarkdownView(content:message.content.isEmpty ? "Working on it…" : message.content)
+                                .frame(maxWidth:.infinity,alignment:.leading)
+                        }
                         if let stats=message.statistics {
                             HStack(spacing:8) {
                                 if let tokens=stats.outputTokens { Text("\(tokens) tokens") }

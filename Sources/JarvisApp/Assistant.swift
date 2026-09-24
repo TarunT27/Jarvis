@@ -80,6 +80,8 @@ import ScreenCaptureKit
     var claudeProjects:[ClaudeProject]=[]
     /// The Claude hand-off card, when one is open.
     var handoff:HandoffDraft?
+    /// The hand-off in progress, if any, for the live progress card.
+    var claudeRun:ClaudeRun?
     let extensions=ExtensionStore()
     let setup=SetupModel()
     /// The loopback model server answered. Setup reads this rather than guessing.
