@@ -1,6 +1,6 @@
 Computer-use final validation
 Date: 2026-09-20 (America/New_York)
-Checkout: /Users/taruntt/Documents/Codex/2026-09-09/hey-there-i-have-a-macbook/outputs/jarvis
+Checkout: outputs/jarvis (local development checkout)
 
 Toolchain
 - DEVELOPER_DIR=/Library/Developer/CommandLineTools
