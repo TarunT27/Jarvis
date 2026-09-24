@@ -44,7 +44,12 @@ SYSTEM = (
     "web addresses and files, read or replace the clipboard, lock the screen and run the user's Apple Shortcuts. "
     "For Focus or Do Not Disturb, Bluetooth, Wi-Fi, smart-home or anything else without a dedicated tool, call "
     "list_shortcuts and run a matching shortcut, or say that none exists. Convert durations to seconds for "
-    "set_timer. After a tool succeeds, confirm what happened in one short sentence. Active timers: none."
+    "set_timer. After a tool succeeds, confirm what happened in one short sentence. Active timers: none. "
+    "Claude hand-off: when a request needs deep reasoning, substantial or multi-file code, building an app or site, "
+    "or the user asks for Claude, call ask_claude instead of attempting it yourself. Write prompt as a complete master "
+    "prompt with the headings Goal, Context, Requirements and Deliverable (for builds add Tech stack and How to verify), "
+    "using only what the user actually said. Set project only when the user names a project or asks for a new one; "
+    "otherwise leave it empty. Known projects: none yet. The user reviews and edits the prompt before it is sent."
 )
 
 # accepted: the set of outcomes that count as correct. None means "no tool call"
@@ -90,6 +95,10 @@ CASES = [
     ("Lock my screen.",                                                    {"lock_screen"}),
     ("Turn on Do Not Disturb.",                                            {"list_shortcuts"}),
     ("Turn it off.",                                                       AMBIGUOUS),
+    # Claude hand-off: a consequential action (it leaves the Mac), proposed on a card.
+    ("Use Claude to design a database schema for a lending library.",      {"ask_claude"}),
+    ("Build me a to-do web app in a new project called todo.",             {"ask_claude"}),
+    ("Ask Claude to explain in depth how transformer attention works.",    {"ask_claude"}),
     # Ambiguous: a consequential action here would be wrong. Answering, asking a
     # clarifying question, or a read-only lookup to disambiguate are all acceptable.
     ("Send it to him when you get a chance.",                              AMBIGUOUS),
@@ -126,7 +135,7 @@ def policy_check(name, args):
     if not all(isinstance(v, str) for v in args.values()):
         problems.append("non-string argument")
         return problems
-    for f in fields - {"due", "attendees", "label"}:
+    for f in fields - {"due", "attendees", "label", "project", "reason"}:
         if not args.get(f, "").strip(): problems.append(f"empty {f}")
     if name in ("send_email", "save_draft"):
         to, subject = args.get("to", ""), args.get("subject", "")
@@ -144,6 +153,10 @@ def policy_check(name, args):
         if not (re.fullmatch(r"\d{1,5}", sec) and 1 <= int(sec) <= 86400): problems.append("seconds not 1-86400")
     if name == "quit_app" and args.get("bundle_id") != "com.apple.Safari": problems.append("wrong bundle id")
     if name == "open_url" and not re.match(r"^https?://[^/@]+", args.get("url", "")): problems.append("not an http(s) url")
+    if name == "ask_claude":
+        if args.get("model") not in ("claude-opus-5-5", "claude-sonnet-5", "claude-fable-5-1", "claude-haiku-4-5-20251001"): problems.append("unknown model")
+        if args.get("effort") not in ("low", "medium", "high", "xhigh", "max"): problems.append("bad effort")
+        if "todo" in args.get("prompt", "").lower() and args.get("project", "").lower() not in ("todo",): problems.append("project not todo")
     if name == "create_reminder":
         due = args.get("due", "")
         if due and not ISO.match(due):         problems.append("due lacks ISO8601 offset")

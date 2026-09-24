@@ -80,12 +80,22 @@ struct MainView:View {
                 // approval can be clicked, tabbed into, or reached by VoiceOver - and
                 // disabling also suppresses the Stop button's Escape shortcut, so
                 // Escape means Decline and nothing else while this is up.
-                .disabled(assistant.proposal != nil)
-                .accessibilityHidden(assistant.proposal != nil)
-            if let proposal=assistant.proposal { approvalOverlay(proposal) }
+                .disabled(assistant.proposal != nil || assistant.handoff != nil)
+                .accessibilityHidden(assistant.proposal != nil || assistant.handoff != nil)
+            if let draft=assistant.handoff { handoffOverlay(draft) }
+            else if let proposal=assistant.proposal { approvalOverlay(proposal) }
         }
         .animation(JarvisMotion.settling(reduceMotion), value: assistant.proposal?.id)
+        .animation(JarvisMotion.settling(reduceMotion), value: assistant.handoff == nil)
         .onAppear { QuickBar.shared.openMainWindow={ openWindow(id:"main") } }
+    }
+
+    private func handoffOverlay(_ draft:HandoffDraft) -> some View {
+        ZStack {
+            Rectangle().fill(Color.black.opacity(0.38)).ignoresSafeArea().onTapGesture {}.accessibilityHidden(true)
+            ClaudeHandoffView(assistant:assistant,draft:draft)
+                .transition(reduceMotion ? .opacity : .scale(scale:0.94,anchor:.bottom).combined(with:.opacity))
+        }
     }
 
     /// The approval grows out of the conversation it interrupted rather than sliding in
@@ -128,6 +138,7 @@ struct MainView:View {
                 case "Overview":DashboardView(assistant:assistant)
                 case "Computer use":ComputerUseView(assistant:assistant)
                 case "Setup":SetupView(assistant:assistant,setup:assistant.setup)
+                case "Extensions":ExtensionsView(assistant:assistant)
                 case "Chat directory":ChatDirectoryView(assistant:assistant) { showingNewProject=true }
                 case "Notes & prompts":WorkspaceView(assistant:assistant)
                 case "Memory":RecordView(assistant:assistant,kind:"memory",title:"Explicit memories",subtitle:"Lasting facts are saved only when you ask or approve.")
@@ -372,9 +383,21 @@ enum ApprovalCopy {
     ]
     /// Values that are identifiers, paths or timestamps read character by
     /// character. They are shown exactly as they will be used, never reformatted.
-    private static let literal: Set<String> = ["to","attendees","path","source","destination","id","start","end","timezone","due","bundle_id","url","name"]
-    private static let labels: [String:String] = ["to":"To","id":"Event ID","due":"Due","timezone":"Time zone","url":"Address","name":"Shortcut"]
+    private static let literal: Set<String> = ["to","attendees","path","source","destination","id","start","end","timezone","due","bundle_id","url","name","_json"]
+    private static let labels: [String:String] = ["to":"To","id":"Event ID","due":"Due","timezone":"Time zone","url":"Address","name":"Shortcut","_json":"Arguments"]
 
+    /// Where an approved action's data goes, when that is not only this Mac.
+    static func destination(_ call: ToolCall) -> String? {
+        if let service = outbound[call.name] { return service }
+        switch call.name {
+        case "open_url": return "the web, opened in your browser"
+        case "run_shortcut": return "your Shortcuts app; the shortcut may use the internet"
+        default:
+            // An MCP server may be a local program or a remote service; say so either way.
+            if call.name.hasPrefix("mcp__") { return "the \(call.name.dropFirst(5).components(separatedBy:"__").first ?? "") MCP server, which may be on the internet" }
+            return nil
+        }
+    }
     static func headline(_ call: ToolCall) -> String {
         let value = { (key: String) in call.arguments[key] ?? "" }
         switch call.name {
@@ -397,7 +420,12 @@ enum ApprovalCopy {
         case "clipboard_write": return "Replace your clipboard"
         case "lock_screen": return "Lock the screen now"
         case "run_shortcut": return "Run the shortcut “\(value("name"))”"
-        default: return call.name.replacingOccurrences(of:"_",with:" ").capitalized
+        default:
+            if call.name.hasPrefix("mcp__") {
+                let parts=call.name.dropFirst(5).components(separatedBy:"__")
+                return "Use \(parts.dropFirst().joined(separator:"__").replacingOccurrences(of:"_",with:" ")) from \(parts.first ?? "an MCP server")"
+            }
+            return call.name.replacingOccurrences(of:"_",with:" ").capitalized
         }
     }
     static func fields(_ call: ToolCall) -> [String] {
@@ -564,7 +592,7 @@ struct ApprovalView:View {
 
     @ViewBuilder
     private var destination:some View {
-        if let service=ApprovalCopy.outbound[proposal.call.name] {
+        if let service=ApprovalCopy.destination(proposal.call) {
             Label("This leaves your Mac. It goes to \(service).",systemImage:"globe")
                 .font(.callout).foregroundStyle(JarvisTheme.recording)
         } else {

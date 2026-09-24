@@ -435,6 +435,13 @@ struct ChatView: View {
             Button { assistant.deep = true } label: {
                 Label("Deep · Qwen3.8 27B", systemImage: assistant.deep ? "checkmark" : "cpu")
             }.disabled(!assistant.models.contains(Configuration.deep))
+            Divider()
+            // The typed text becomes the prompt; the card is where it is reviewed and sent.
+            Button { assistant.openClaudeHandoff() } label: {
+                Label(assistant.claudeAvailable ? "Send to Claude…" : "Send to Claude… (install the Claude app)", systemImage: "arrow.up.forward.circle")
+            }
+            .keyboardShortcut(.return, modifiers: [.command, .shift])
+            .disabled(!assistant.claudeAvailable || !assistant.unlocked)
         } label: {
             HStack(spacing: 8) {
                 Text(assistant.deep ? "Qwen3.8 27B" : "Qwen3.5 9B").font(.callout).monospacedDigit()

@@ -71,7 +71,7 @@ private final class QuickPanel:NSPanel {
         // it up: the answer, or the question it is waiting on, belongs here.
         NotificationCenter.default.addObserver(forName:NSWindow.didResignKeyNotification,object:panel,queue:.main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self,let assistant=self.assistant,!assistant.busy,assistant.proposal==nil,!assistant.recording else { return }
+                guard let self,let assistant=self.assistant,!assistant.busy,assistant.proposal==nil,assistant.handoff==nil,!assistant.recording else { return }
                 self.hide()
             }
         }
@@ -81,7 +81,7 @@ private final class QuickPanel:NSPanel {
         // approval is up, Escape passes through so it keeps meaning Decline.
         escapeMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
             guard event.keyCode==53,let self,let panel=self.panel,event.window===panel,
-                  self.assistant?.proposal==nil else { return event }
+                  self.assistant?.proposal==nil,self.assistant?.handoff==nil else { return event }
             self.hide()
             return nil
         }
@@ -105,7 +105,11 @@ struct QuickBarView:View {
         VStack(spacing:0) {
             VStack(alignment:.leading,spacing:0) {
                 inputRow
-                if let proposal=assistant.proposal {
+                if let draft=assistant.handoff {
+                    Divider().overlay(JarvisTheme.border)
+                    ScrollView { ClaudeHandoffView(assistant:assistant,draft:draft).scaleEffect(0.92).padding(.vertical,-12) }
+                        .frame(maxHeight:420)
+                } else if let proposal=assistant.proposal {
                     Divider().overlay(JarvisTheme.border)
                     ApprovalView(proposal:proposal,computerContext:proposal.call.name.hasPrefix("computer_") ? assistant.computerObservation:nil) { assistant.decide($0) }
                         .frame(maxHeight:360)
@@ -172,6 +176,10 @@ struct QuickBarView:View {
         HStack(spacing:14) {
             Text(assistant.status).lineLimit(1)
             Spacer()
+            if assistant.claudeAvailable {
+                Button("Send to Claude") { assistant.quickBarTurnStart=assistant.messages.count;assistant.openClaudeHandoff() }
+                    .buttonStyle(.borderless).keyboardShortcut(.return,modifiers:[.command,.shift])
+            }
             Button("New") { assistant.newChat();assistant.quickBarTurnStart=nil;focused=true }
                 .buttonStyle(.borderless).keyboardShortcut("n",modifiers:.command)
             Button("Open Jarvis") { QuickBar.shared.openMainWindow?();NSApp.activate(ignoringOtherApps:true);close() }

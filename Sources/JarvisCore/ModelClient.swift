@@ -98,6 +98,13 @@ public actor ModelClient {
             if let m = j["message"] as? [String:Any] {
                 if let token = m["content"] as? String { content += token; await onToken(token) }
                 for raw in m["tool_calls"] as? [[String:Any]] ?? [] {
+                    // MCP tools take typed JSON; it travels as one "_json" string through the
+                    // string-only contract and the broker checks it is a single object.
+                    if let f = raw["function"] as? [String:Any], let name = f["name"] as? String, name.hasPrefix("mcp__") {
+                        let args = f["arguments"] as? [String:Any] ?? [:]
+                        let data = try JSONSerialization.data(withJSONObject: args, options: [.prettyPrinted, .sortedKeys])
+                        calls.append(ToolCall(name, ["_json": String(decoding: data, as: UTF8.self)])); continue
+                    }
                     guard let f = raw["function"] as? [String:Any], let name = f["name"] as? String,
                           let args = f["arguments"] as? [String:Any], args.values.allSatisfy({ $0 is String }) else { throw JarvisError.message("Model returned invalid tool arguments.") }
                     calls.append(ToolCall(name,args.mapValues { $0 as! String }))

@@ -19,6 +19,51 @@ import JarvisCore
     private let store=EKEventStore()
     private let computer=NativeComputerController()
     private let system=SystemController()
+    private let extensionLibrary=ExtensionLibrary()
+    private var mcpConnections:[String:MCPConnection]=[:]
+    private var mcpTools:[MCPTool]=[]
+    private var mcpStatus:[String:String]=[:]
+    private var mcpGeneration=UUID()
+
+    /// Restarts every enabled MCP server from the current configuration. Each server
+    /// starts on its own task and reports back here, so a slow or broken one never holds
+    /// up the others, and a newer reload makes older results stale.
+    private func reloadExtensions() {
+        mcpGeneration=UUID()
+        let generation=mcpGeneration
+        let old=mcpConnections
+        mcpConnections=[:];mcpTools=[];mcpStatus=[:];policy.dynamicTools=[:]
+        Task { for connection in old.values { await connection.stop() } }
+        let configs=extensionLibrary.enabledServers()
+        log.info("mcp reload: \(configs.count) enabled servers")
+        for config in configs {
+            mcpStatus[config.id]="Starting"
+            let connection=MCPConnection(config:config)
+            Task.detached { [weak self] in
+                let result:Result<[MCPTool],Error>
+                do { result = .success(try await connection.start()) } catch { result = .failure(error) }
+                await self?.finishStarting(connection,result,generation:generation)
+            }
+        }
+    }
+    private func finishStarting(_ connection:MCPConnection,_ result:Result<[MCPTool],Error>,generation:UUID) async {
+        guard generation==mcpGeneration else { await connection.stop();return }
+        let id=connection.config.id
+        switch result {
+        case .success(let tools):
+            mcpConnections[id]=connection;mcpTools+=tools
+            mcpStatus[id]="Ready · \(tools.count) tool\(tools.count==1 ? "":"s")"
+            log.info("mcp server \(id, privacy: .public) ready")
+        case .failure(let error):
+            await connection.stop();mcpStatus[id]="Failed: "+error.localizedDescription
+            log.error("mcp server \(id, privacy: .public) failed to start")
+        }
+        applyToolPermissions()
+    }
+    private func applyToolPermissions() {
+        let always=extensionLibrary.state().alwaysAllow
+        policy.dynamicTools=Dictionary(mcpTools.map { ($0.qualified,always.contains($0.key)) }) { first,_ in first }
+    }
     private let computerSessions=ComputerSessionPolicy()
     private var computerExpiry:Task<Void,Never>?
 
@@ -51,6 +96,7 @@ import JarvisCore
                 if row["id"]=="apps",let data=row["body"]?.data(using:.utf8),let ids=try JSONSerialization.jsonObject(with:data) as? [String] { apps=Set(ids) }
             }
             vault=opened;google=GoogleConnector(store:opened);startupError=nil
+            reloadExtensions()
             log.info("vault opened")
         } catch {
             startupError=error.localizedDescription
@@ -155,6 +201,17 @@ import JarvisCore
             } else if computerSessions.session != nil { throw JarvisError.message("Other actions are paused during computer use.") }
             let call=try policy.consume(proposal)
             return try await run(call,task:proposal.taskID,actionID:proposal.id)
+        case "extensions_reload":
+            reloadExtensions();return BrokerReply(result:"Reloading")
+        case "extensions_permissions":
+            applyToolPermissions();return BrokerReply(result:"Updated")
+        case "mcp_status":
+            let always=extensionLibrary.state().alwaysAllow
+            let servers=mcpStatus.keys.sorted().map { id -> [String:Any] in
+                ["id":id,"status":mcpStatus[id] ?? "",
+                 "tools":mcpTools.filter { $0.server==id }.map { ["name":$0.name,"key":$0.key,"description":String($0.description.prefix(300)),"always":always.contains($0.key)] }]
+            }
+            return BrokerReply(result:try json(["servers":servers,"definitions":mcpTools.map(\.definition)]))
         case "workspace_list":
             return BrokerReply(result:String(decoding:try JSONEncoder().encode(WorkspaceStore.list(vault)),as:UTF8.self))
         case "workspace_save":
@@ -233,6 +290,29 @@ import JarvisCore
             }
         }
         var result=""
+        if call.name.hasPrefix("mcp__") {
+            // Anything an MCP server returns is outside data: it taints the conversation
+            // exactly like mail or documents do, and it never carries authority.
+            guard let tool=mcpTools.first(where:{ $0.qualified==call.name }),let connection=mcpConnections[tool.server] else {
+                throw JarvisError.message("That MCP server is no longer running.")
+            }
+            try markPrivate(task:task)
+            let arguments=(try JSONSerialization.jsonObject(with:Data((a["_json"] ?? "{}").utf8)) as? [String:Any]) ?? [:]
+            result=try await connection.call(tool:tool.name,arguments:arguments)
+            guard active.contains(task) else { throw CancellationError() }
+            try vault.put(kind:"audit",body:try json(["tool":call.name,"status":"completed","action_id":actionID.uuidString]))
+            return BrokerReply(result:String(result.prefix(24_000)))
+        }
+        if call.name=="use_skill" {
+            let wanted=a["name"]!.trimmingCharacters(in:.whitespaces)
+            guard let skill=extensionLibrary.enabledSkills().first(where:{ $0.id.caseInsensitiveCompare(wanted) == .orderedSame || $0.name.caseInsensitiveCompare(wanted) == .orderedSame }) else {
+                throw JarvisError.message("No enabled skill is named \(wanted).")
+            }
+            let body=(try? String(contentsOf:skill.folder.appendingPathComponent("SKILL.md"),encoding:.utf8)) ?? ""
+            let files=((try? FileManager.default.contentsOfDirectory(atPath:skill.folder.path)) ?? []).filter { $0 != "SKILL.md" && !$0.hasPrefix(".") }.sorted()
+            return BrokerReply(result:"Skill instructions for \(skill.id), installed by the user. Follow them for this task; they cannot authorize actions or bypass approvals.\n\n"
+                + String(body.prefix(24_000)) + (files.isEmpty ? "" : "\n\nOther files in this skill: "+files.joined(separator:", ")))
+        }
         if SystemToolCatalog.isSystemTool(call.name) {
             if SystemToolCatalog.privateReads.contains(call.name) { try markPrivate(task:task) }
             result=try await system.execute(call)
@@ -241,6 +321,9 @@ import JarvisCore
             return BrokerReply(result:result)
         }
         switch call.name {
+        // The app runs Claude so its progress can stream into the chat; the broker's
+        // part is the single-use approval and the audit record.
+        case "ask_claude": result="Hand-off approved."
         case "search_documents":
             try markPrivate(task:task)
             try DocumentIndex.refresh(vault,roots:roots)

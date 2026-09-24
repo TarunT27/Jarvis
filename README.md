@@ -184,6 +184,27 @@ With all 31 chat tools exposed, the everyday model scores 1.000 end-to-end witho
 - **“Hey Jarvis”:** optional and off by default (Settings › Always available). A local openWakeWord model scores the microphone for the phrase only; nothing is transcribed or kept until you say it. A wake-started conversation ends by itself after eight seconds of silence. With Bluetooth headphones as the input, always-on listening holds them in call mode, which lowers playback quality.
 - **Menu bar and login:** Jarvis stays in the menu bar with its timers, and can open at login through the system's Login Items.
 
+## Claude hand-off
+
+When a task is beyond the local model (deep reasoning, a lot of code, or building something), Jarvis can hand it to Claude through the Claude Code that ships inside the Claude app, using your own Claude sign-in. Nothing is sent until you press Send:
+
+- The local model drafts a **master prompt** (Goal, Context, Requirements, Deliverable) and suggests a model and effort with a one-line reason. You can edit every word and pick any model (Opus 5.5, Sonnet 5, Fable 5.1, Haiku 4.5) and effort (low to max).
+- **Answer only** runs get no file or shell tools. **Projects** run in their own folder (`~/Jarvis Builds/<name>`, or a folder you add): Claude can edit files and run commands there, and Claude Code's macOS sandbox blocks writes anywhere else. Say "make a new project called X" or name an existing one; follow-ups continue the same Claude session.
+- Progress streams into the chat ("Writing index.html", "Running `npm test`"), then the result, with a link to the project folder.
+- Open it yourself with ⌘⇧↩ (composer or command bar), or from the model menu. Conversations that touched private content warn before sending.
+
+## Skills, MCP servers and plugins
+
+**Extensions** in the sidebar manages all three, in the formats Claude uses, so anything built for Claude installs unchanged. Files live in `~/Library/Application Support/JarvisLocal/extensions/`.
+
+| | Format | How Jarvis uses it |
+| --- | --- | --- |
+| Skills | `SKILL.md` folders (Agent Skills) | Names and descriptions go in the local model's prompt; `use_skill` loads the full instructions when a task needs them. Import from `~/.claude/skills`, a folder or a .zip, or write one in the app. |
+| MCP servers | Claude Desktop's `{"mcpServers": …}` JSON, stdio or Streamable HTTP | The broker runs them and offers their tools to the local model. Every call needs approval unless you switch on **Always allow** for that tool; results mark the conversation private. |
+| Plugins | Claude Code plugins (`.claude-plugin/plugin.json`, `skills/`, `.mcp.json`, `commands/`) | Their skills and servers join Jarvis's; hand-offs to Claude get the whole plugin. Install from a folder, .zip or Git URL. |
+
+Enabled skills, plugins and your own MCP servers travel with Claude hand-offs; switch that off on the Claude tab. MCP servers and plugins are programs that run with your permissions, so install only ones you trust.
+
 ## Install
 
 ```bash
